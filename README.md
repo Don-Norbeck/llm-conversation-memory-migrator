@@ -454,3 +454,41 @@ Built by \[Don Norbeck](https://darkaidefense.com) — because your accumulated 
 
 \*If this tool helped you, consider starring the repo and sharing it with someone else making the switch.\*
 
+
+
+## Roadmap
+
+**v0.1 — ChatGPT → Claude ✅ Shipped**
+- [x] ChatGPT export parser
+- [x] Ollama-powered local summarization (Llama 3.2)
+- [x] Auto topic classification
+- [x] Interactive review UI (Gradio)
+- [x] Bucket merge and rename
+- [x] Claude-ready markdown export
+- [x] Master context document generation
+- [x] Temp file cleanup after parsing
+
+**v0.2 — Polish & Performance**
+- [ ] User-defined bucket names on first run
+- [ ] Resume interrupted analysis
+- [ ] Per-conversation bucket reassignment in Review tab
+- [ ] Versioned exports — no silent overwrites
+- [ ] Shutdown button in UI
+- [ ] Test mode — analyze first 10 conversations only
+- [ ] Better classification accuracy (Llama 3.1 8B option)
+- [ ] Fix filename sanitization (Work_and_Career not Work___Career)
+- [ ] Startup cleanup of any leftover temp files from unclean shutdown
+- [ ] Privacy report showing files created and cleaned
+
+**v0.3 — Any LLM → Any LLM**
+- [ ] Claude export parser
+- [ ] Gemini export parser
+- [ ] Direct Claude Projects API upload
+- [ ] ChatGPT memory import format
+- [ ] Multi-language support
+
+**v1.0 — Packaged for Everyone**
+- [ ] Windows installer (.exe)
+- [ ] Mac installer (.app)
+- [ ] One-click Ollama + model setup
+- [ ] No terminal required
