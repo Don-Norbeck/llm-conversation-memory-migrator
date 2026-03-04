@@ -1,22 +1,31 @@
 # llm-conversation-memory-migrator
 
-When you switch AI services you lose months of accumulated context. This fixes that. Local-only, open source, works for anyone — starting with ChatGPT → Claude.  No cloud. No data sharing. Your context/conversations belong to you.
+## The Problem
 
-# llm-conversation-memory-migrator
+When you switch AI services you lose months of accumulated context.
+Every new conversation starts from zero. That's frustrating and
+inefficient.
 
+The obvious fix — just upload your conversation history — doesn't
+work. A typical ChatGPT export is 400-500MB of JSON. That's
+approximately 50 million tokens. Claude's context window is 200K
+tokens. You can't upload 50 million tokens into a 200K window.
 
+## The Solution
 
-> Move your mind, not just your messages.
+LLM Conversation Memory Migrator solves this by compressing your
+conversation history into a context window that actually fits.
 
+1. Export your conversation history from ChatGPT
+2. Run the migrator locally — Ollama summarizes every conversation
+   on your machine
+3. 489 conversations become 10 clean markdown files (~200K tokens)
+4. Upload to Claude Projects — your context is restored
 
+Tested on 489 real conversations. 98% summarization success rate.
+5/5 factual recall on validation tests.
 
-A fully local, privacy-first tool that helps anyone migrate their conversation history and accumulated context from one LLM service to another — starting with ChatGPT → Claude.
-
-
-
-\*\*Your data never leaves your machine. Ever.\*\*
-
-
+Your data never leaves your machine.
 
 ---
 
@@ -388,42 +397,6 @@ See \[docs/adding-adapters.md](docs/adding-adapters.md) for how to add a new LLM
 
 
 
-\## Roadmap
-
-
-
-\*\*v1.0 — ChatGPT → Claude\*\*
-
-\- \[x] ChatGPT export parser
-
-\- \[ ] Ollama-powered local summarization
-
-\- \[ ] Auto topic classification
-
-\- \[ ] Interactive review UI (Gradio)
-
-\- \[ ] Claude-ready markdown export
-
-\- \[ ] Master context document generation
-
-\- \[ ] Windows + Mac packaging (.exe / .app)
-
-
-
-\*\*v2.0 — Any LLM → Any LLM\*\*
-
-\- \[ ] Claude export parser
-
-\- \[ ] Gemini export parser
-
-\- \[ ] Direct Claude Projects API upload
-
-\- \[ ] ChatGPT memory import format
-
-\- \[ ] Multi-language support
-
-
-
 ---
 
 
@@ -461,34 +434,43 @@ Built by \[Don Norbeck](https://darkaidefense.com) — because your accumulated 
 **v0.1 — ChatGPT → Claude ✅ Shipped**
 - [x] ChatGPT export parser
 - [x] Ollama-powered local summarization (Llama 3.2)
-- [x] Auto topic classification
+- [x] Auto topic classification into 10 buckets
 - [x] Interactive review UI (Gradio)
 - [x] Bucket merge and rename
 - [x] Claude-ready markdown export
-- [x] Master context document generation
-- [x] Temp file cleanup after parsing
+- [x] Full context document generation
+- [x] Temp file cleanup after parsing — no conversation data left on disk
+- [x] Tested on 489 real conversations — 98% success rate, 5/5 recall
 
-**v0.2 — Polish & Performance**
-- [ ] User-defined bucket names on first run
-- [ ] Resume interrupted analysis
-- [ ] Per-conversation bucket reassignment in Review tab
+**v0.2 — Quality & Review**
+- [ ] Review tab expanded — show all conversations with current bucket assignment
+- [ ] Individual conversation reassignment to a different bucket
+- [ ] Search and filter conversations by title or keyword
+- [ ] Expanded summaries — 4-6 sentences or 8-20 bullet points (user choice)
+- [ ] Increase conversation context window for richer detail capture
+- [ ] Capture specific names, decisions, tools, and file names in summaries
+- [ ] Cross-conversation synthesis pass — topic graph and intellectual centers
+- [ ] Target ~5000 words per exported context file
+- [ ] Rename full_context.md — remove legacy terminology
+- [ ] Fix filename sanitization — Work_and_Career not Work___Career
+- [ ] Fix grammar — "1 conversations" → "1 conversation"
+- [ ] Checkpoint and resume — save progress, continue interrupted analysis
+- [ ] Startup cleanup of leftover temp files from unclean shutdown
+- [ ] Better classification — Llama 3.1 8B option in Settings
 - [ ] Versioned exports — no silent overwrites
 - [ ] Shutdown button in UI
 - [ ] Test mode — analyze first 10 conversations only
-- [ ] Better classification accuracy (Llama 3.1 8B option)
-- [ ] Fix filename sanitization (Work_and_Career not Work___Career)
-- [ ] Startup cleanup of any leftover temp files from unclean shutdown
-- [ ] Privacy report showing files created and cleaned
 
 **v0.3 — Any LLM → Any LLM**
-- [ ] Claude export parser
-- [ ] Gemini export parser
+- [ ] Claude export adapter
+- [ ] Gemini export adapter
 - [ ] Direct Claude Projects API upload
-- [ ] ChatGPT memory import format
-- [ ] Multi-language support
+- [ ] LinkedIn activity export adapter
+- [ ] Delta updates — re-run migrator and merge new conversations only
 
 **v1.0 — Packaged for Everyone**
 - [ ] Windows installer (.exe)
 - [ ] Mac installer (.app)
-- [ ] One-click Ollama + model setup
+- [ ] One-click Ollama and model setup
 - [ ] No terminal required
+- [ ] Onboarding interview — structured questions generate your userPreferences block automatically

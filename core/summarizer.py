@@ -65,7 +65,7 @@ def _call_ollama(prompt: str, model: str = DEFAULT_MODEL) -> Optional[str]:
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=120) as response:
+        with urllib.request.urlopen(req, timeout=300) as response:
             result = json.loads(response.read().decode("utf-8"))
             return result.get("response", "")
     except urllib.error.URLError as e:
@@ -112,18 +112,40 @@ def _repair_json(raw: str) -> str:
             return raw
         raw = raw[idx:]
 
-    # Close any open strings by counting unescaped quotes
+    # Close any open strings by tracking unescaped structural quotes.
+    # A simple toggle breaks when LLM outputs unescaped inner quotes inside
+    # string values (e.g. `"the "pre-AI internet" era"`).  Instead, when we
+    # are already inside a string and hit a `"`, peek at the next non-whitespace
+    # character: if it looks like a JSON delimiter (`,`, `}`, `]`, `:`, `"`) or
+    # we are at end-of-input, treat it as a real string-closer; otherwise treat
+    # it as an unescaped content quote and stay inside the string.
     in_string = False
     escaped = False
-    for char in raw:
+    i = 0
+    n = len(raw)
+    while i < n:
+        char = raw[i]
         if escaped:
             escaped = False
+            i += 1
             continue
         if char == '\\':
             escaped = True
+            i += 1
             continue
         if char == '"':
-            in_string = not in_string
+            if not in_string:
+                in_string = True
+            else:
+                # Look past whitespace to find the next structural character.
+                j = i + 1
+                while j < n and raw[j] in ' \t\r\n':
+                    j += 1
+                next_char = raw[j] if j < n else ''
+                if next_char in ',}]:"' or j >= n:
+                    in_string = False  # proper string closer
+                # else: unescaped inner quote — remain in_string
+        i += 1
 
     if in_string:
         raw += '"'
