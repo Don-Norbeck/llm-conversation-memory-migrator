@@ -17,7 +17,7 @@ import gradio as gr
 from pathlib import Path
 
 from adapters.chatgpt import load_from_zip
-from core.summarizer import summarize_all, check_ollama_running
+from core.summarizer import summarize_all, summarize_all_gen, check_ollama_running
 from core.classifier import classify_summaries, get_bucket_stats, merge_buckets, rename_bucket, get_all_bucket_names
 from core.exporter import export_all
 from core import config
@@ -58,49 +58,54 @@ def handle_upload(zip_file) -> str:
 
 # ── Step 2: Analyze ───────────────────────────────────────────────────────────
 
-def handle_analyze(progress=gr.Progress(track_tqdm=True)):
+def handle_analyze():
+    def _yields(status, output, choices=None):
+        """Helper: yield a consistent 5-tuple for all outputs."""
+        update = gr.update(choices=choices, value=None) if choices is not None else gr.update()
+        yield status, output, update, update, update
+
     if not state["conversations"]:
-        return (
+        yield from _yields(
+            "",
             "❌ No conversations loaded. Please upload your export first.",
-            gr.update(choices=[]),
-            gr.update(choices=[]),
-            gr.update(choices=[]),
+            [],
         )
+        return
 
     # ── Double-run warning ───────────────────────────────────────────────────
     if state["analysis_complete"]:
-        return (
+        yield from _yields(
+            "",
             "⚠️ Analysis has already been run on this export.\n\n"
             "If you want to re-analyze, please upload your export again on the "
             "**Upload** tab — this ensures your previous results are not lost.\n\n"
             "If you want to continue to export, click the **Export** tab.",
-            gr.update(),
-            gr.update(),
-            gr.update(),
         )
+        return
 
     if not check_ollama_running():
-        return (
+        yield from _yields(
+            "",
             "❌ Ollama is not running.\n\n"
             "Please start Ollama and try again.\n"
             "On Windows: Open the Ollama app from your Start menu.\n"
             "Then run: `ollama pull llama3.2`",
-            gr.update(choices=[]),
-            gr.update(choices=[]),
-            gr.update(choices=[]),
+            [],
         )
+        return
 
     ollama_cfg = config.get_ollama_config()
     total = len(state["conversations"])
+    summaries = []
 
-    def update_progress(current, total):
-        progress(current / total, desc=f"Summarizing {current} of {total} conversations...")
-
-    summaries = summarize_all(
+    for current, total, title, summary in summarize_all_gen(
         state["conversations"],
         model=ollama_cfg["model"],
-        progress_callback=update_progress
-    )
+    ):
+        if summary:
+            summaries.append(summary)
+        status = f"⏳ **Summarizing {current} of {total}:** {title}"
+        yield status, "", gr.update(), gr.update(), gr.update()
 
     state["summaries"] = summaries
     grouped = classify_summaries(summaries)
@@ -117,7 +122,8 @@ def handle_analyze(progress=gr.Progress(track_tqdm=True)):
         label = "conversation" if count == 1 else "conversations"
         lines.append(f"- **{s['bucket']}**: {count} {label}")
 
-    return (
+    yield (
+        "",
         "\n".join(lines),
         gr.update(choices=bucket_names, value=None),
         gr.update(choices=bucket_names, value=None),
@@ -278,6 +284,7 @@ def build_ui():
                 "🧠 Analyze with Local AI",
                 variant="primary"
             )
+            analyze_status = gr.Markdown(value="")
             analyze_output = gr.Markdown()
 
         # ── Step 3: Review ───────────────────────────────────────────────────
@@ -321,7 +328,7 @@ def build_ui():
             analyze_btn.click(
                 fn=handle_analyze,
                 inputs=[],
-                outputs=[analyze_output, merge_source, merge_target, rename_old]
+                outputs=[analyze_status, analyze_output, merge_source, merge_target, rename_old]
             )
 
             refresh_btn.click(

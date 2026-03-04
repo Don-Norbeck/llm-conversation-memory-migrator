@@ -217,6 +217,22 @@ def summarize_all(
     return summaries
 
 
+def summarize_all_gen(
+    conversations: list,
+    model: str = DEFAULT_MODEL,
+):
+    """
+    Generator version of summarize_all.
+    Yields (current, total, title, summary_or_None) after each conversation,
+    allowing callers to stream progress updates in real time.
+    """
+    total = len(conversations)
+    for i, convo in enumerate(conversations):
+        title = convo.get("title", "Untitled")
+        summary = summarize_conversation(convo, model=model)
+        yield (i + 1, total, title, summary)
+
+
 def check_ollama_running() -> bool:
     """Check if Ollama is running and accessible on localhost."""
     try:
