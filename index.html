@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OwnYourContext — Your AI Memory. Your Machine. Your Call.</title>
+  <meta name="description" content="When you switch AI services you lose months of accumulated context. OwnYourContext fixes that. 100% local, open source, no cloud.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Barlow+Condensed:wght@300;400;600;800&family=Barlow:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --orange: #FF6B1A;
+      --orange-dim: #cc5200;
+      --teal: #00C9B1;
+      --dark: #080C10;
+      --dark-2: #0D1117;
+      --dark-3: #161B22;
+      --dark-4: #1E2530;
+      --text: #E6EDF3;
+      --text-dim: #8B949E;
+      --border: rgba(255,107,26,0.2);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--dark);
+      color: var(--text);
+      font-family: 'Barlow', sans-serif;
+      font-weight: 300;
+      overflow-x: hidden;
+    }
+
+    /* NOISE TEXTURE OVERLAY */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0.4;
+    }
+
+    /* GRID BACKGROUND */
+    .grid-bg {
+      position: fixed;
+      inset: 0;
+      background-image: 
+        linear-gradient(rgba(255,107,26,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,107,26,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* NAV */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: 20px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: linear-gradient(to bottom, rgba(8,12,16,0.95), transparent);
+      backdrop-filter: blur(10px);
+    }
+
+    .nav-logo {
+      font-family: 'Space Mono', monospace;
+      font-size: 14px;
+      color: var(--orange);
+      letter-spacing: 0.05em;
+      text-decoration: none;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 32px;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--text-dim);
+      text-decoration: none;
+      font-size: 13px;
+      font-family: 'Space Mono', monospace;
+      letter-spacing: 0.05em;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover { color: var(--orange); }
+
+    /* HERO */
+    .hero {
+      position: relative;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 120px 40px 80px;
+      max-width: 1100px;
+      margin: 0 auto;
+      z-index: 1;
+    }
+
+    .hero-eyebrow {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      color: var(--orange);
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      margin-bottom: 24px;
+      opacity: 0;
+      animation: fadeUp 0.6s ease forwards 0.2s;
+    }
+
+    .hero-eyebrow span {
+      display: inline-block;
+      background: rgba(255,107,26,0.1);
+      border: 1px solid rgba(255,107,26,0.3);
+      padding: 4px 12px;
+      border-radius: 2px;
+    }
+
+    .hero-title {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 800;
+      font-size: clamp(52px, 8vw, 96px);
+      line-height: 0.95;
+      text-transform: uppercase;
+      letter-spacing: -0.02em;
+      margin-bottom: 32px;
+    }
+
+    .hero-title .line-1 {
+      display: block;
+      color: var(--text);
+      opacity: 0;
+      animation: fadeUp 0.6s ease forwards 0.4s;
+    }
+
+    .hero-title .line-2 {
+      display: block;
+      color: var(--orange);
+      opacity: 0;
+      animation: fadeUp 0.6s ease forwards 0.55s;
+    }
+
+    .hero-title .line-3 {
+      display: block;
+      color: var(--text-dim);
+      font-weight: 300;
+      font-size: clamp(28px, 4vw, 48px);
+      opacity: 0;
+      animation: fadeUp 0.6s ease forwards 0.7s;
+    }
+
+    .hero-sub {
+      font-size: 18px;
+      color: var(--text-dim);
+      max-width: 560px;
+      line-height: 1.7;
+      margin-bottom: 48px;
+      opacity: 0;
+      animation: fadeUp 0.6s ease forwards 0.85s;
+    }
+
+    .hero-sub strong { color: var(--text); font-weight: 500; }
+
+    .hero-cta {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      opacity: 0;
+      animation: fadeUp 0.6s ease forwards 1s;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--orange);
+      color: #000;
+      font-family: 'Space Mono', monospace;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      padding: 14px 28px;
+      text-decoration: none;
+      transition: all 0.2s;
+      clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+    }
+
+    .btn-primary:hover {
+      background: #fff;
+      transform: translateY(-2px);
+    }
+
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: transparent;
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      font-size: 13px;
+      letter-spacing: 0.05em;
+      padding: 14px 28px;
+      text-decoration: none;
+      border: 1px solid var(--border);
+      transition: all 0.2s;
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--orange);
+      color: var(--orange);
+    }
+
+    /* STATS BAR */
+    .stats-bar {
+      position: relative;
+      z-index: 1;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,107,26,0.03);
+      padding: 24px 40px;
+      display: flex;
+      justify-content: center;
+      gap: 0;
+      flex-wrap: wrap;
+    }
+
+    .stat {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 8px 48px;
+      border-right: 1px solid var(--border);
+    }
+
+    .stat:last-child { border-right: none; }
+
+    .stat-number {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 800;
+      font-size: 36px;
+      color: var(--orange);
+      line-height: 1;
+    }
+
+    .stat-label {
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      margin-top: 4px;
+    }
+
+    /* SECTIONS */
+    section {
+      position: relative;
+      z-index: 1;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 100px 40px;
+    }
+
+    .section-label {
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      color: var(--orange);
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 800;
+      font-size: clamp(36px, 5vw, 56px);
+      text-transform: uppercase;
+      line-height: 1;
+      margin-bottom: 48px;
+    }
+
+    /* PROBLEM / SOLUTION */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2px;
+    }
+
+    .col-block {
+      background: var(--dark-3);
+      padding: 40px;
+      border: 1px solid var(--dark-4);
+      transition: border-color 0.3s;
+    }
+
+    .col-block:hover { border-color: var(--border); }
+
+    .col-block h3 {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 600;
+      font-size: 22px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 16px;
+      color: var(--text-dim);
+    }
+
+    .col-block h3 span { color: var(--orange); }
+
+    .col-block p {
+      color: var(--text-dim);
+      line-height: 1.7;
+      font-size: 15px;
+    }
+
+    .col-block p strong { color: var(--text); }
+
+    /* FLOW */
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 2px;
+      margin-top: 48px;
+    }
+
+    .flow-step {
+      background: var(--dark-3);
+      border: 1px solid var(--dark-4);
+      padding: 32px 24px;
+      position: relative;
+      transition: all 0.3s;
+    }
+
+    .flow-step:hover {
+      border-color: var(--border);
+      background: var(--dark-4);
+    }
+
+    .flow-number {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 800;
+      font-size: 64px;
+      color: rgba(255,107,26,0.1);
+      line-height: 1;
+      margin-bottom: 16px;
+    }
+
+    .flow-step h4 {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 600;
+      font-size: 18px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+      color: var(--orange);
+    }
+
+    .flow-step p {
+      font-size: 13px;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    /* PRIVACY BADGES */
+    .badges {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 48px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(0,201,177,0.05);
+      border: 1px solid rgba(0,201,177,0.2);
+      color: var(--teal);
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      padding: 8px 16px;
+    }
+
+    .badge::before {
+      content: '✓';
+      font-weight: 700;
+    }
+
+    /* TERMINAL BLOCK */
+    .terminal {
+      background: var(--dark-2);
+      border: 1px solid var(--dark-4);
+      border-top: 3px solid var(--orange);
+      padding: 32px;
+      margin-top: 48px;
+      font-family: 'Space Mono', monospace;
+    }
+
+    .terminal-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .dot-r { background: #FF5F57; }
+    .dot-y { background: #FFBD2E; }
+    .dot-g { background: #28CA41; }
+
+    .terminal pre {
+      font-size: 13px;
+      color: var(--text-dim);
+      line-height: 1.8;
+      white-space: pre-wrap;
+    }
+
+    .terminal .cmd { color: var(--teal); }
+    .terminal .out { color: var(--text-dim); }
+    .terminal .success { color: #28CA41; }
+    .terminal .highlight { color: var(--orange); }
+
+    /* WAITLIST */
+    .waitlist-section {
+      background: var(--dark-3);
+      border: 1px solid var(--border);
+      padding: 64px 40px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .waitlist-section::before {
+      content: '';
+      position: absolute;
+      top: -100px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 400px;
+      height: 400px;
+      background: radial-gradient(circle, rgba(255,107,26,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .waitlist-section h2 {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 800;
+      font-size: clamp(32px, 5vw, 52px);
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+
+    .waitlist-section p {
+      color: var(--text-dim);
+      font-size: 16px;
+      margin-bottom: 32px;
+      max-width: 480px;
+      margin-left: auto;
+      margin-right: auto;
+      line-height: 1.6;
+    }
+
+    .waitlist-form {
+      display: flex;
+      gap: 0;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    .waitlist-form input {
+      flex: 1;
+      background: var(--dark);
+      border: 1px solid var(--border);
+      border-right: none;
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      font-size: 13px;
+      padding: 14px 20px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .waitlist-form input:focus { border-color: var(--orange); }
+    .waitlist-form input::placeholder { color: var(--text-dim); }
+
+    .waitlist-form button {
+      background: var(--orange);
+      color: #000;
+      border: none;
+      font-family: 'Space Mono', monospace;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      padding: 14px 24px;
+      cursor: pointer;
+      transition: background 0.2s;
+      white-space: nowrap;
+    }
+
+    .waitlist-form button:hover { background: #fff; }
+
+    .privacy-note {
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      color: var(--text-dim);
+      margin-top: 16px;
+      letter-spacing: 0.05em;
+    }
+
+    /* FOOTER */
+    footer {
+      position: relative;
+      z-index: 1;
+      border-top: 1px solid var(--border);
+      padding: 32px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .footer-left {
+      font-family: 'Space Mono', monospace;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    .footer-left span { color: var(--orange); }
+
+    .footer-links {
+      display: flex;
+      gap: 24px;
+    }
+
+    .footer-links a {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      color: var(--text-dim);
+      text-decoration: none;
+      letter-spacing: 0.05em;
+      transition: color 0.2s;
+    }
+
+    .footer-links a:hover { color: var(--orange); }
+
+    /* ANIMATIONS */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* GLOW LINE */
+    .glow-line {
+      width: 60px;
+      height: 2px;
+      background: var(--orange);
+      margin-bottom: 32px;
+      box-shadow: 0 0 12px var(--orange);
+    }
+
+    /* RESPONSIVE */
+    @media (max-width: 768px) {
+      nav { padding: 16px 20px; }
+      .nav-links { display: none; }
+      .hero { padding: 100px 20px 60px; }
+      .two-col { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr 1fr; }
+      section { padding: 60px 20px; }
+      .stats-bar { padding: 20px; }
+      .stat { padding: 8px 24px; }
+      .waitlist-form { flex-direction: column; }
+      .waitlist-form input { border-right: 1px solid var(--border); border-bottom: none; }
+      footer { padding: 24px 20px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+
+<nav>
+  <a href="/" class="nav-logo">OwnYourContext</a>
+  <ul class="nav-links">
+    <li><a href="#how">How It Works</a></li>
+    <li><a href="#privacy">Privacy</a></li>
+    <li><a href="https://github.com/Don-Norbeck/llm-conversation-memory-migrator">GitHub</a></li>
+    <li><a href="#waitlist">Get Updates</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-eyebrow"><span>// Open Source · 100% Local · No Cloud</span></div>
+  <h1 class="hero-title">
+    <span class="line-1">Your AI Memory.</span>
+    <span class="line-2">Your Machine.</span>
+    <span class="line-3">Your Call.</span>
+  </h1>
+  <p class="hero-sub">
+    When you switch AI services, you lose <strong>months of accumulated context</strong>. 
+    Every project. Every preference. Every decision. Gone.<br><br>
+    OwnYourContext fixes that — entirely on your machine.
+  </p>
+  <div class="hero-cta">
+    <a href="https://github.com/Don-Norbeck/llm-conversation-memory-migrator" class="btn-primary">
+      ↗ View on GitHub
+    </a>
+    <a href="#how" class="btn-secondary">
+      → See How It Works
+    </a>
+  </div>
+</div>
+
+<!-- STATS -->
+<div class="stats-bar">
+  <div class="stat">
+    <span class="stat-number">489</span>
+    <span class="stat-label">Conversations Tested</span>
+  </div>
+  <div class="stat">
+    <span class="stat-number">98%</span>
+    <span class="stat-label">Success Rate</span>
+  </div>
+  <div class="stat">
+    <span class="stat-number">5/5</span>
+    <span class="stat-label">Recall Validated</span>
+  </div>
+  <div class="stat">
+    <span class="stat-number">0</span>
+    <span class="stat-label">Cloud Calls Made</span>
+  </div>
+</div>
+
+<!-- PROBLEM / SOLUTION -->
+<section id="problem">
+  <div class="section-label">// The Problem</div>
+  <h2 class="section-title">50 Million Tokens.<br>200K Window.</h2>
+  <div class="two-col">
+    <div class="col-block">
+      <h3>The <span>Lock-In</span> Nobody Talks About</h3>
+      <p>Your ChatGPT export is <strong>400–500MB of JSON</strong> — approximately 50 million tokens of conversation history. Claude's context window is 200,000 tokens. You can't upload 50 million tokens into a 200K window. The math doesn't work. So you start over. Every time.</p>
+    </div>
+    <div class="col-block">
+      <h3>The <span>Fix</span> That Actually Works</h3>
+      <p>OwnYourContext compresses your conversation history into a context window that fits. A local AI model running on <strong>your machine</strong> summarizes and categorizes every conversation. 489 conversations become 10 clean markdown files. Upload to Claude Projects. Context restored.</p>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how">
+  <div class="section-label">// How It Works</div>
+  <h2 class="section-title">Four Steps.<br>One Afternoon.</h2>
+  <div class="flow">
+    <div class="flow-step">
+      <div class="flow-number">01</div>
+      <h4>Upload</h4>
+      <p>Drop your ChatGPT export zip. The full, unmodified file. 500MB is fine.</p>
+    </div>
+    <div class="flow-step">
+      <div class="flow-number">02</div>
+      <h4>Analyze</h4>
+      <p>Local Ollama + Llama 3.2 reads every conversation on your machine. No API calls. Nothing leaves.</p>
+    </div>
+    <div class="flow-step">
+      <div class="flow-number">03</div>
+      <h4>Review</h4>
+      <p>Auto-classified into topic buckets. Merge, rename, or reorganize before export.</p>
+    </div>
+    <div class="flow-step">
+      <div class="flow-number">04</div>
+      <h4>Export</h4>
+      <p>Clean markdown files, one per topic. Ready for Claude Projects or any LLM service.</p>
+    </div>
+  </div>
+
+  <div class="terminal" style="margin-top:48px">
+    <div class="terminal-bar">
+      <div class="dot dot-r"></div>
+      <div class="dot dot-y"></div>
+      <div class="dot dot-g"></div>
+    </div>
+    <pre><span class="cmd">$ python app.py</span>
+<span class="out">Extracting conversations... Parsed <span class="highlight">489 conversations</span>.</span>
+<span class="out">🧹 Cleaned up temporary files.</span>
+<span class="success">✅ Analysis complete — 481/489 conversations summarized</span>
+<span class="out">
+Detected Topics:
+  Work &amp; Career: <span class="highlight">169</span> conversations
+  Technical &amp; Coding: <span class="highlight">138</span> conversations
+  Research &amp; Learning: <span class="highlight">32</span> conversations
+  ...
+</span>
+<span class="success">✅ Export complete — 10 files written</span>
+<span class="out">📁 Output: ~/Documents/LLMMigrator/output</span></pre>
+  </div>
+</section>
+
+<!-- PRIVACY -->
+<section id="privacy">
+  <div class="glow-line"></div>
+  <div class="section-label">// Privacy Architecture</div>
+  <h2 class="section-title">Local First.<br>Not a Principle.<br>The Point.</h2>
+  <p style="color: var(--text-dim); font-size:16px; max-width:600px; line-height:1.8; margin-bottom:32px;">
+    Your conversation history contains things you wouldn't share with a third party. Health decisions. Financial discussions. Career strategy. Personal relationships. Every summarization call goes to <code style="color:var(--orange); font-family:'Space Mono',monospace; font-size:13px;">localhost:11434</code>. Nothing leaves your machine until you decide otherwise.
+  </p>
+  <div class="badges">
+    <span class="badge">100% Local Processing</span>
+    <span class="badge">No Cloud API Calls</span>
+    <span class="badge">No Data Sharing</span>
+    <span class="badge">Open Source — MIT License</span>
+    <span class="badge">Temp Files Auto-Deleted</span>
+    <span class="badge">You Control the Output</span>
+  </div>
+</section>
+
+<!-- WAITLIST -->
+<section id="waitlist" style="padding: 0 40px 100px;">
+  <div class="waitlist-section">
+    <h2>Get Notified<br><span style="color:var(--orange)">When
