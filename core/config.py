@@ -23,6 +23,8 @@ DEFAULTS = {
     "user_name": "",
     "last_export_path": "",
     "summary_style": "concise",
+    "test_mode": False,
+    "test_mode_n": 10,
 }
 
 

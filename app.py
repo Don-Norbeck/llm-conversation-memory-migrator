@@ -294,6 +294,11 @@ def handle_analyze():
         if 0 < len(selected) < len(conversations):
             conversations = selected
 
+    # Apply test mode slice
+    if config.get("test_mode", False):
+        n = int(config.get("test_mode_n", 10))
+        conversations = conversations[:n]
+
     ollama_cfg = config.get_ollama_config()
     total = len(conversations)
     summaries = []
@@ -684,19 +689,33 @@ def build_ui():
                 value="Detailed (8-20 bullet points)" if cfg.get("summary_style") == "detailed" else "Concise (4-6 sentences)",
             )
 
+            gr.Markdown("---\n**Test Mode**")
+            test_mode_input = gr.Checkbox(
+                label="Test Mode — analyze first N conversations only",
+                value=cfg.get("test_mode", False),
+            )
+            test_mode_n_input = gr.Number(
+                label="N",
+                value=cfg.get("test_mode_n", 10),
+                precision=0,
+                minimum=1,
+            )
+
             save_settings_btn = gr.Button("💾 Save Settings")
             settings_output = gr.Markdown()
 
-            def save_settings(name, model, url, style):
+            def save_settings(name, model, url, style, test_mode, test_mode_n):
                 config.set_value("user_name", name)
                 config.set_value("ollama_model", model)
                 config.set_value("ollama_url", url)
                 config.set_value("summary_style", "detailed" if "Detailed" in style else "concise")
+                config.set_value("test_mode", bool(test_mode))
+                config.set_value("test_mode_n", int(test_mode_n) if test_mode_n else 10)
                 return "✅ Settings saved."
 
             save_settings_btn.click(
                 fn=save_settings,
-                inputs=[user_name_input, ollama_model_input, ollama_url_input, summary_style_input],
+                inputs=[user_name_input, ollama_model_input, ollama_url_input, summary_style_input, test_mode_input, test_mode_n_input],
                 outputs=[settings_output]
             )
 
