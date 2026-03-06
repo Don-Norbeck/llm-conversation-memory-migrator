@@ -694,12 +694,52 @@ Detected Topics:
 <section id="waitlist" style="padding: 0 40px 100px;">
   <div class="waitlist-section">
     <h2>Get Notified<br><span style="color:var(--orange)">When v0.2 Ships</span></h2>
-    <p>Conversation selection, richer summaries, and export improvements. No accounts. No email. Just open source.</p>
+    <p>Conversation selection, richer summaries, and export improvements. Drop your email and we'll ping you once.</p>
     <div style="margin: 0 auto; max-width: 480px;">
-      <a href="https://github.com/Don-Norbeck/llm-conversation-memory-migrator/issues/new?title=Waitlist:+Notify+me+when+v0.2+ships&body=Please+notify+me+when+v0.2+is+available." target="_blank" rel="noopener" class="btn-primary" style="display:inline-flex; margin-bottom:20px;">→ Join the Waitlist on GitHub</a>
-      <p style="color:var(--text-dim); font-size:14px; font-family:'Space Mono',monospace; letter-spacing:0.03em;">Power user? <a href="https://github.com/Don-Norbeck/llm-conversation-memory-migrator" target="_blank" rel="noopener" style="color:var(--orange); text-decoration:none;">Star the repo</a> to get notified automatically.</p>
+      <form id="waitlist-form" style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-bottom:16px;">
+        <input
+          id="waitlist-email"
+          type="email"
+          placeholder="you@example.com"
+          required
+          style="flex:1; min-width:200px; background:var(--dark-2); border:1px solid var(--border); color:var(--text); font-family:'Space Mono',monospace; font-size:13px; padding:14px 16px; outline:none; transition:border-color 0.2s;"
+          onfocus="this.style.borderColor='var(--orange)'"
+          onblur="this.style.borderColor='var(--border)'"
+        >
+        <button type="submit" class="btn-primary" style="cursor:pointer; border:none; white-space:nowrap;">→ Notify Me</button>
+      </form>
+      <p id="waitlist-msg" style="display:none; font-family:'Space Mono',monospace; font-size:12px; letter-spacing:0.05em; margin-bottom:16px;"></p>
+      <p style="color:var(--text-dim); font-size:12px; font-family:'Space Mono',monospace; letter-spacing:0.03em;">
+        Power user? <a href="https://github.com/Don-Norbeck/llm-conversation-memory-migrator" target="_blank" rel="noopener" style="color:var(--orange); text-decoration:none;">Star the repo on GitHub</a>
+      </p>
     </div>
     <p class="privacy-note">// no accounts. no email lists. no tracking. ever.</p>
+    <script>
+      document.getElementById('waitlist-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var email = document.getElementById('waitlist-email').value.trim();
+        var msg = document.getElementById('waitlist-msg');
+        try {
+          var res = await fetch('https://darkaidefense.com/mail.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email })
+          });
+          if (res.ok) {
+            msg.textContent = "// you're on the list. we'll email you when v0.2 ships.";
+            msg.style.color = '#28CA41';
+            msg.style.display = 'block';
+            document.getElementById('waitlist-form').style.display = 'none';
+          } else {
+            throw new Error('non-ok response');
+          }
+        } catch (err) {
+          msg.textContent = '// something went wrong. try again.';
+          msg.style.color = 'var(--orange)';
+          msg.style.display = 'block';
+        }
+      });
+    </script>
   </div>
 </section>
 
