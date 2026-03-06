@@ -734,4 +734,42 @@ Detected Topics:
 <!-- WAITLIST -->
 <section id="waitlist" style="padding: 0 40px 100px;">
   <div class="waitlist-section">
-    <h2>Get Notified<br><span style="color:var(--orange)">When
+    <h2>Get Notified<br><span style="color:var(--orange)">When v0.2 Ships</span></h2>
+    <p>Conversation selection, richer summaries, and export improvements. Leave your email and we'll let you know when it's ready.</p>
+    <div class="waitlist-form">
+      <input type="email" placeholder="your@email.com" id="waitlist-email" />
+      <button onclick="handleWaitlist()">NOTIFY ME</button>
+    </div>
+    <p class="privacy-note">// no spam. no tracking. one email when v0.2 ships.</p>
+    <p class="privacy-note" id="waitlist-msg" style="color:var(--teal); margin-top:12px;"></p>
+  </div>
+</section>
+
+<footer>
+  <div class="footer-left">
+    <span>OwnYourContext</span> — built by <a href="https://darkaidefense.com" style="color:var(--text-dim); text-decoration:none;" onmouseover="this.style.color='#FF6B1A'" onmouseout="this.style.color='#8B949E'">Don Norbeck</a>
+  </div>
+  <div class="footer-links">
+    <a href="https://github.com/Don-Norbeck/llm-conversation-memory-migrator">GitHub</a>
+    <a href="https://darkaidefense.com">DarkAIDefense</a>
+    <a href="mailto:don@darkaidefense.com">Contact</a>
+  </div>
+</footer>
+
+<script>
+function handleWaitlist() {
+  const email = document.getElementById('waitlist-email').value;
+  const msg = document.getElementById('waitlist-msg');
+  if (!email || !email.includes('@')) {
+    msg.style.color = 'var(--orange)';
+    msg.textContent = '// please enter a valid email address';
+    return;
+  }
+  msg.style.color = 'var(--teal)';
+  msg.textContent = '// got it. you\'ll hear from us when v0.2 ships.';
+  document.getElementById('waitlist-email').value = '';
+}
+</script>
+
+</body>
+</html>
