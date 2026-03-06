@@ -298,9 +298,11 @@ def handle_analyze():
     total = len(conversations)
     summaries = []
 
+    summary_style = config.get("summary_style", "concise")
     for current, total, title, summary in summarize_all_gen(
         conversations,
         model=ollama_cfg["model"],
+        summary_style=summary_style,
     ):
         if summary:
             summaries.append(summary)
@@ -676,18 +678,25 @@ def build_ui():
                 value=cfg.get("ollama_url", "http://localhost:11434"),
             )
 
+            summary_style_input = gr.Dropdown(
+                label="Summary Style",
+                choices=["Concise (4-6 sentences)", "Detailed (8-20 bullet points)"],
+                value="Detailed (8-20 bullet points)" if cfg.get("summary_style") == "detailed" else "Concise (4-6 sentences)",
+            )
+
             save_settings_btn = gr.Button("💾 Save Settings")
             settings_output = gr.Markdown()
 
-            def save_settings(name, model, url):
+            def save_settings(name, model, url, style):
                 config.set_value("user_name", name)
                 config.set_value("ollama_model", model)
                 config.set_value("ollama_url", url)
+                config.set_value("summary_style", "detailed" if "Detailed" in style else "concise")
                 return "✅ Settings saved."
 
             save_settings_btn.click(
                 fn=save_settings,
-                inputs=[user_name_input, ollama_model_input, ollama_url_input],
+                inputs=[user_name_input, ollama_model_input, ollama_url_input, summary_style_input],
                 outputs=[settings_output]
             )
 

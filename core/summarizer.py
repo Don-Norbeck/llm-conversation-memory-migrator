@@ -15,14 +15,14 @@ from typing import Dict, Any, Optional
 OLLAMA_URL = "http://localhost:11434/api/generate"
 DEFAULT_MODEL = "llama3.2"
 
-SUMMARIZE_PROMPT = """You are analyzing a conversation between a user and an AI assistant.
+SUMMARIZE_PROMPT_CONCISE = """You are analyzing a conversation between a user and an AI assistant.
 
 Extract and return ONLY a JSON object with these fields:
 {{
   "topics": ["list", "of", "main", "topics"],
-  "summary": "2-3 sentence summary of what was discussed and accomplished",
+  "summary": "4-6 sentence summary. Include: specific names of people, companies, tools, or frameworks mentioned; specific decisions made and conclusions reached; specific file names, project names, or artifacts created; and any open questions or unresolved threads.",
   "key_decisions": ["important decisions or conclusions reached"],
-  "artifacts": ["code, documents, frameworks, or other outputs created"],
+  "artifacts": ["code, documents, frameworks, or other outputs created — use specific names"],
   "open_threads": ["unresolved questions or next steps mentioned"],
   "preferences": ["user preferences, style notes, or behavioral patterns observed"],
   "bucket": "single best category from the list below"
@@ -47,6 +47,42 @@ Conversation title: {title}
 Conversation:
 {text}
 """
+
+SUMMARIZE_PROMPT_DETAILED = """You are analyzing a conversation between a user and an AI assistant.
+
+Extract and return ONLY a JSON object with these fields:
+{{
+  "topics": ["list", "of", "main", "topics"],
+  "summary": "Write 8-20 bullet points (as a single string, each bullet on its own line starting with '• '). Cover: specific names of people, companies, tools, and frameworks mentioned; every specific decision made and conclusion reached; every specific file name, project name, or artifact created; all open questions and unresolved threads; and any notable context or background established.",
+  "key_decisions": ["important decisions or conclusions reached — be specific"],
+  "artifacts": ["code, documents, frameworks, or other outputs created — use specific names"],
+  "open_threads": ["unresolved questions or next steps mentioned"],
+  "preferences": ["user preferences, style notes, or behavioral patterns observed"],
+  "bucket": "single best category from the list below"
+}}
+
+Bucket definitions — pick the single best match:
+- Work & Career: jobs, resumes, interviews, career planning, professional networking, LinkedIn
+- Creative Projects: writing, design, art, music, games, creative tools, storytelling
+- Technical & Coding: code, programming, scripts, software, hardware, AI projects, local AI setup
+- Research & Learning: articles, research, education, learning new topics, summaries
+- Health & Wellness: medical, fitness, diet, mental health, diabetes, medications
+- Personal & Family: family, relationships, personal life, home, civic involvement
+- Finance & Legal: money, taxes, legal questions, budgeting, contracts
+- Hobbies & Interests: sports, collecting, skiing, vinyl records, sneakers, cards, cooking, games
+- Travel & Planning: trips, destinations, travel logistics, hotels, flights
+- General: anything that does not clearly fit the above categories
+
+Return ONLY valid JSON. No preamble. No explanation.
+
+Conversation title: {title}
+
+Conversation:
+{text}
+"""
+
+# Default prompt alias
+SUMMARIZE_PROMPT = SUMMARIZE_PROMPT_CONCISE
 
 
 def _call_ollama(prompt: str, model: str = DEFAULT_MODEL) -> Optional[str]:
@@ -163,6 +199,7 @@ def _repair_json(raw: str) -> str:
 def summarize_conversation(
     convo: Dict[str, Any],
     model: str = DEFAULT_MODEL,
+    summary_style: str = "concise",
 ) -> Optional[Dict[str, Any]]:
     """
     Summarize a single normalized conversation using local Ollama.
@@ -174,7 +211,10 @@ def summarize_conversation(
     if not text.strip():
         return None
 
-    prompt = SUMMARIZE_PROMPT.format(title=title, text=text)
+    prompt_template = (
+        SUMMARIZE_PROMPT_DETAILED if summary_style == "detailed" else SUMMARIZE_PROMPT_CONCISE
+    )
+    prompt = prompt_template.format(title=title, text=text)
     raw = _call_ollama(prompt, model=model)
 
     if not raw:
@@ -208,7 +248,8 @@ def summarize_conversation(
 def summarize_all(
     conversations: list,
     model: str = DEFAULT_MODEL,
-    progress_callback=None
+    progress_callback=None,
+    summary_style: str = "concise",
 ) -> list:
     """
     Summarize a list of conversations using local Ollama.
@@ -217,6 +258,7 @@ def summarize_all(
         conversations: List of normalized conversation dicts
         model: Ollama model name
         progress_callback: Optional function(current, total) for progress updates
+        summary_style: "concise" (4-6 sentences) or "detailed" (8-20 bullets)
 
     Returns:
         List of summary dicts (failed summaries are excluded)
@@ -231,7 +273,7 @@ def summarize_all(
             if i % 10 == 0:
                 print(f"  Summarizing {i + 1}/{total} ...")
 
-        summary = summarize_conversation(convo, model=model)
+        summary = summarize_conversation(convo, model=model, summary_style=summary_style)
         if summary:
             summaries.append(summary)
 
@@ -242,6 +284,7 @@ def summarize_all(
 def summarize_all_gen(
     conversations: list,
     model: str = DEFAULT_MODEL,
+    summary_style: str = "concise",
 ):
     """
     Generator version of summarize_all.
@@ -251,7 +294,7 @@ def summarize_all_gen(
     total = len(conversations)
     for i, convo in enumerate(conversations):
         title = convo.get("title", "Untitled")
-        summary = summarize_conversation(convo, model=model)
+        summary = summarize_conversation(convo, model=model, summary_style=summary_style)
         yield (i + 1, total, title, summary)
 
 

@@ -22,6 +22,7 @@ DEFAULTS = {
     "output_dir": str(Path.home() / "Documents" / "LLMMigrator" / "output"),
     "user_name": "",
     "last_export_path": "",
+    "summary_style": "concise",
 }
 
 

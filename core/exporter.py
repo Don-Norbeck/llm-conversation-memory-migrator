@@ -12,8 +12,8 @@ from typing import Dict, List, Any, Optional
 
 def sanitize_filename(name: str) -> str:
     """Convert a bucket name to a safe filename."""
-    clean = re.sub(r'[\\/*?:"<>|&]', "_", name)
-    clean = clean.replace(" ", "_")
+    clean = name.replace("&", "and")
+    clean = re.sub(r'[^a-zA-Z0-9]+', "_", clean)
     return clean.strip("_")
 
 
@@ -81,9 +81,16 @@ def export_bucket(
 
     lines = []
 
+    word_count = sum(
+        len(format_summary_as_markdown(s).split()) for s in summaries
+    )
     lines.append(f"# {bucket_name} — Context Document")
     lines.append(f"*Generated: {datetime.now(tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}*")
-    lines.append(f"*Conversations: {len(summaries)}*")
+    convo_word = "conversation" if len(summaries) == 1 else "conversations"
+    lines.append(f"*{len(summaries)} {convo_word}*")
+    if word_count > 5000:
+        lines.append("")
+        lines.append(f"> **Note:** This bucket contains {len(summaries)} conversations. Consider splitting into sub-topics.")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -146,7 +153,7 @@ def export_master_context(
     Generate a master context document summarizing all buckets.
     Returns the path to the written file.
     """
-    output_path = output_dir / "master_context.md"
+    output_path = output_dir / "full_context.md"
     lines = []
 
     name_str = f" — {user_name}" if user_name else ""
