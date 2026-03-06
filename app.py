@@ -5,8 +5,8 @@ Launches a local Gradio UI — no internet connection required.
 """
 
 import os
-import shutil
 import tempfile
+import time
 
 # ── Privacy: disable all huggingface and gradio telemetry ────────────────────
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
@@ -143,13 +143,17 @@ def handle_upload(zip_file):
     try:
         tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
-                shutil.copy2(zip_file, tmp.name)
-                tmp_path = tmp.name
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".zip")
+            os.close(tmp_fd)
+            with open(tmp_path, 'wb') as f:
+                f.write(zip_file)
             conversations = load_from_zip(Path(tmp_path))
         finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
         state["conversations"] = conversations
         state["summaries"] = []
         state["grouped"] = {}
@@ -257,11 +261,11 @@ def handle_table_change(df_data):
 
 # ── Step 2: Analyze ───────────────────────────────────────────────────────────
 
-def handle_analyze():
+def handle_analyze(progress=gr.Progress()):
     def _yields(status, output, choices=None):
-        """Helper: yield a consistent 5-tuple for all outputs."""
+        """Helper: yield a consistent 4-tuple for all outputs."""
         update = gr.update(choices=choices, value=None) if choices is not None else gr.update()
-        yield status, output, update, update, update
+        yield status, output, update, update
 
     if not state["conversations"]:
         yield from _yields(
@@ -311,6 +315,11 @@ def handle_analyze():
     ollama_cfg = config.get_ollama_config()
     total = len(conversations)
     summaries = []
+    start_time = time.time()
+
+    def _elapsed_str():
+        s = int(time.time() - start_time)
+        return f"{s // 60}:{s % 60:02d}"
 
     summary_style = config.get("summary_style", "concise")
     for current, total, title, summary in summarize_all_gen(
@@ -320,8 +329,9 @@ def handle_analyze():
     ):
         if summary:
             summaries.append(summary)
-        status = f"⏳ **Summarizing {current} of {total}:** {title}"
-        yield status, "", gr.update(), gr.update(), gr.update()
+        progress(current / total)
+        status = f"⏳ Summarizing {current} of {total}: {title} — elapsed: {_elapsed_str()}"
+        yield status, "", gr.update(), gr.update()
 
     state["summaries"] = summaries
     grouped = classify_summaries(summaries)
@@ -331,7 +341,7 @@ def handle_analyze():
     stats = get_bucket_stats(grouped)
     bucket_names = get_all_bucket_names(grouped)
 
-    lines = [f"✅ Analysis complete — **{len(summaries)}/{total} conversations summarized**\n"]
+    lines = [f"✅ Analysis complete — **{len(summaries)}/{total} summarized in {_elapsed_str()}**\n"]
     lines.append("### Detected Topics:\n")
     for s in stats:
         count = s['count']
@@ -343,39 +353,21 @@ def handle_analyze():
         "\n".join(lines),
         gr.update(choices=bucket_names, value=None),
         gr.update(choices=bucket_names, value=None),
-        gr.update(choices=bucket_names, value=None),
     )
 
 
 # ── Step 3: Review ────────────────────────────────────────────────────────────
 
-def handle_merge(source: str, target: str) -> tuple:
-    if not source or not target:
-        return "❌ Please select both a source and target bucket.", gr.update(), gr.update(), gr.update()
-    if source == target:
-        return "❌ Source and target must be different.", gr.update(), gr.update(), gr.update()
-
-    state["grouped"] = merge_buckets(state["grouped"], source, target)
-    bucket_names = get_all_bucket_names(state["grouped"])
-    return (
-        f"✅ Merged **{source}** into **{target}**.",
-        gr.update(choices=bucket_names, value=None),
-        gr.update(choices=bucket_names, value=None),
-        gr.update(choices=bucket_names, value=None),
-    )
-
-
 def handle_rename(old_name: str, new_name: str) -> tuple:
     if not old_name or not new_name:
-        return "❌ Please enter both current and new bucket names.", gr.update(), gr.update(), gr.update()
+        return "❌ Please enter both current and new bucket names.", gr.update(), gr.update()
     if old_name == new_name:
-        return "❌ Names are the same.", gr.update(), gr.update(), gr.update()
+        return "❌ Names are the same.", gr.update(), gr.update()
 
     state["grouped"] = rename_bucket(state["grouped"], old_name, new_name)
     bucket_names = get_all_bucket_names(state["grouped"])
     return (
         f"✅ Renamed **{old_name}** to **{new_name}**.",
-        gr.update(choices=bucket_names, value=None),
         gr.update(choices=bucket_names, value=None),
         gr.update(choices=bucket_names, value=None),
     )
@@ -386,8 +378,22 @@ def handle_refresh() -> tuple:
     return (
         gr.update(choices=bucket_names, value=None),
         gr.update(choices=bucket_names, value=None),
-        gr.update(choices=bucket_names, value=None),
     )
+
+
+def handle_view_summaries(bucket_name: str) -> str:
+    if not bucket_name or not state["grouped"]:
+        return ""
+    convos = state["grouped"].get(bucket_name, [])
+    if not convos:
+        return f"*No conversations in **{bucket_name}**.*"
+    parts = []
+    for c in convos:
+        title = c.get("title", "Untitled")
+        date = c.get("created", "")
+        summary = c.get("summary", "*(no summary)*")
+        parts.append(f"### {title}\n*{date}*\n\n{summary}")
+    return "\n\n---\n\n".join(parts)
 
 
 # ── Step 4: Export ────────────────────────────────────────────────────────────
@@ -474,7 +480,7 @@ def build_ui():
             upload_input = gr.File(
                 label="Upload ChatGPT Export (.zip)",
                 file_types=[".zip"],
-                type="filepath"
+                type="binary"
             )
             upload_btn = gr.Button("📂 Load Export", variant="primary")
             upload_output = gr.Markdown()
@@ -594,58 +600,51 @@ def build_ui():
             Rename or merge topic buckets before exporting.
             """)
 
+            gr.Markdown("**Rename Bucket**")
             with gr.Row():
-                with gr.Column():
-                    gr.Markdown("**Merge Buckets**")
-                    merge_source = gr.Dropdown(
-                        label="Merge from",
-                        choices=[],
-                        interactive=True
-                    )
-                    merge_target = gr.Dropdown(
-                        label="Merge into",
-                        choices=[],
-                        interactive=True
-                    )
-                    merge_btn = gr.Button("🔀 Merge")
-                    merge_output = gr.Markdown()
-
-                with gr.Column():
-                    gr.Markdown("**Rename Bucket**")
-                    rename_old = gr.Dropdown(
-                        label="Current name",
-                        choices=[],
-                        interactive=True
-                    )
-                    rename_new = gr.Textbox(label="New name")
-                    rename_btn = gr.Button("✏️ Rename")
-                    rename_output = gr.Markdown()
+                rename_old = gr.Dropdown(
+                    label="Current name",
+                    choices=[],
+                    interactive=True
+                )
+                rename_new = gr.Textbox(label="New name")
+            rename_btn = gr.Button("✏️ Rename")
+            rename_output = gr.Markdown()
 
             refresh_btn = gr.Button("🔄 Refresh Bucket List")
+
+            gr.Markdown("---")
+            gr.Markdown("**View Summaries**")
+            summary_bucket_dd = gr.Dropdown(
+                label="View summaries for bucket:",
+                choices=[],
+                interactive=True,
+            )
+            summary_viewer = gr.Markdown(value="")
 
             # Wire analyze button now that dropdowns are defined
             analyze_btn.click(
                 fn=handle_analyze,
                 inputs=[],
-                outputs=[analyze_status, analyze_output, merge_source, merge_target, rename_old]
+                outputs=[analyze_status, analyze_output, rename_old, summary_bucket_dd]
             )
 
             refresh_btn.click(
                 fn=handle_refresh,
                 inputs=[],
-                outputs=[merge_source, merge_target, rename_old]
-            )
-
-            merge_btn.click(
-                fn=handle_merge,
-                inputs=[merge_source, merge_target],
-                outputs=[merge_output, merge_source, merge_target, rename_old]
+                outputs=[rename_old, summary_bucket_dd]
             )
 
             rename_btn.click(
                 fn=handle_rename,
                 inputs=[rename_old, rename_new],
-                outputs=[rename_output, merge_source, merge_target, rename_old]
+                outputs=[rename_output, rename_old, summary_bucket_dd]
+            )
+
+            summary_bucket_dd.change(
+                fn=handle_view_summaries,
+                inputs=[summary_bucket_dd],
+                outputs=[summary_viewer],
             )
 
         # ── Step 4: Export ───────────────────────────────────────────────────
@@ -683,10 +682,15 @@ def build_ui():
 
             ollama_model_input = gr.Dropdown(
                 label="Ollama model",
-                choices=["llama3.2", "llama3.1:8b", "mistral"],
+                choices=[
+                    ("llama3.2 (default, fastest — 3B)", "llama3.2"),
+                    ("llama3.1:8b (better quality — 8B)", "llama3.1:8b"),
+                    ("mistral-nemo:12b (best quality — 12B)", "mistral-nemo:12b"),
+                    ("mistral:7b (fast alternative — 7B)", "mistral:7b"),
+                ],
                 value=cfg.get("ollama_model", "llama3.2"),
                 allow_custom_value=True,
-                info="llama3.2 = fastest · llama3.1:8b = better quality · mistral = alternative. Type any model name to use a custom one.",
+                info="Larger models produce richer summaries but run slower. All models run 100% locally on your machine via Ollama.",
             )
 
             ollama_url_input = gr.Textbox(

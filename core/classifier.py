@@ -45,6 +45,10 @@ def classify_summaries(
 
     for summary in summaries:
         bucket = summary.get("bucket", "General")
+        # Guard against model returning a list instead of a string
+        if isinstance(bucket, list):
+            bucket = bucket[0] if bucket else "General"
+        bucket = str(bucket).strip()
         # Normalize — if model returned unknown bucket, send to General
         if bucket not in bucket_set:
             bucket = "General"

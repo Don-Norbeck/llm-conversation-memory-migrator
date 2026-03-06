@@ -15,25 +15,28 @@ from typing import Dict, Any, Optional
 OLLAMA_URL = "http://localhost:11434/api/generate"
 DEFAULT_MODEL = "llama3.2"
 
-SUMMARIZE_PROMPT_CONCISE = """You are analyzing a conversation between a user and an AI assistant.
+# System messages contain instructions only — no conversation content.
+# The conversation text is passed separately as the user prompt.
+
+_SYSTEM_CONCISE = """\
+You are analyzing a conversation between a user and an AI assistant.
 
 Extract and return ONLY a JSON object with these fields:
-{{
+{
   "topics": ["list", "of", "main", "topics"],
-  "summary": "4-6 sentence summary. Include: specific names of people, companies, tools, or frameworks mentioned; specific decisions made and conclusions reached; specific file names, project names, or artifacts created; and any open questions or unresolved threads.",
-  "key_decisions": ["each entry must name a real decision from this conversation — e.g. 'Chose FastAPI over Flask for the backend'"],
+  "summary": "4-6 sentence summary covering specific names of people, companies, tools, or frameworks mentioned; decisions made; file or project names created; and open questions.",
+  "key_decisions": ["each entry must name a real decision from this conversation, e.g. Chose FastAPI over Flask for the backend"],
   "artifacts": ["code, documents, frameworks, or other outputs created — use specific names"],
-  "open_threads": ["each entry must name a real unresolved question or next step from this conversation — e.g. 'Still needs to configure the database connection'"],
+  "open_threads": ["each entry must name a real unresolved question or next step, e.g. Still needs to configure the database connection"],
   "preferences": ["user preferences, style notes, or behavioral patterns observed"],
   "bucket": "single best category from the list below"
-}}
+}
 
-RULES — violations will make the output useless:
-- NEVER write generic placeholder text such as "important decisions or conclusions reached", "unresolved questions or next steps mentioned", or any similar vague filler.
+RULES:
+- NEVER write generic placeholder text such as important decisions or conclusions reached.
 - NEVER copy the field description into the value.
 - If no specific content exists for a field, write an empty array [] — do NOT invent placeholders.
 - Always use actual names, actual decisions, actual topics from the conversation text.
-- Be specific. Vague entries are not acceptable.
 
 Bucket definitions — pick the single best match:
 - Work & Career: jobs, resumes, interviews, career planning, professional networking, LinkedIn
@@ -47,33 +50,27 @@ Bucket definitions — pick the single best match:
 - Travel & Planning: trips, destinations, travel logistics, hotels, flights
 - General: anything that does not clearly fit the above categories
 
-Return ONLY valid JSON. No preamble. No explanation.
+Respond with valid JSON only. Do not repeat these instructions. Do not include any text outside the JSON object."""
 
-Conversation title: {title}
-
-Conversation:
-{text}
-"""
-
-SUMMARIZE_PROMPT_DETAILED = """You are analyzing a conversation between a user and an AI assistant.
+_SYSTEM_DETAILED = """\
+You are analyzing a conversation between a user and an AI assistant.
 
 Extract and return ONLY a JSON object with these fields:
-{{
+{
   "topics": ["list", "of", "main", "topics"],
-  "summary": "Write 8-20 bullet points (as a single string, each bullet on its own line starting with '• '). Cover: specific names of people, companies, tools, and frameworks mentioned; every specific decision made and conclusion reached; every specific file name, project name, or artifact created; all open questions and unresolved threads; and any notable context or background established.",
-  "key_decisions": ["each entry must name a real decision from this conversation — e.g. 'Chose FastAPI over Flask for the backend'"],
+  "summary": "Write 8-20 bullet points as a single string, each bullet on its own line starting with a bullet character. Cover specific names of people, companies, tools, and frameworks mentioned; every decision made; every file or project name created; all open questions; and any notable context established.",
+  "key_decisions": ["each entry must name a real decision from this conversation, e.g. Chose FastAPI over Flask for the backend"],
   "artifacts": ["code, documents, frameworks, or other outputs created — use specific names"],
-  "open_threads": ["each entry must name a real unresolved question or next step from this conversation — e.g. 'Still needs to configure the database connection'"],
+  "open_threads": ["each entry must name a real unresolved question or next step, e.g. Still needs to configure the database connection"],
   "preferences": ["user preferences, style notes, or behavioral patterns observed"],
   "bucket": "single best category from the list below"
-}}
+}
 
-RULES — violations will make the output useless:
-- NEVER write generic placeholder text such as "important decisions or conclusions reached", "unresolved questions or next steps mentioned", or any similar vague filler.
+RULES:
+- NEVER write generic placeholder text such as important decisions or conclusions reached.
 - NEVER copy the field description into the value.
 - If no specific content exists for a field, write an empty array [] — do NOT invent placeholders.
 - Always use actual names, actual decisions, actual topics from the conversation text.
-- Be specific. Vague entries are not acceptable.
 
 Bucket definitions — pick the single best match:
 - Work & Career: jobs, resumes, interviews, career planning, professional networking, LinkedIn
@@ -87,25 +84,22 @@ Bucket definitions — pick the single best match:
 - Travel & Planning: trips, destinations, travel logistics, hotels, flights
 - General: anything that does not clearly fit the above categories
 
-Return ONLY valid JSON. No preamble. No explanation.
+Respond with valid JSON only. Do not repeat these instructions. Do not include any text outside the JSON object."""
 
-Conversation title: {title}
+_USER_PROMPT = "Conversation title: {title}\n\nConversation:\n{text}"
 
-Conversation:
-{text}
-"""
-
-# Default prompt alias
+# Legacy alias kept for any external callers
+SUMMARIZE_PROMPT_CONCISE = _SYSTEM_CONCISE + "\n\n" + _USER_PROMPT
+SUMMARIZE_PROMPT_DETAILED = _SYSTEM_DETAILED + "\n\n" + _USER_PROMPT
 SUMMARIZE_PROMPT = SUMMARIZE_PROMPT_CONCISE
 
 
-def _call_ollama(prompt: str, model: str = DEFAULT_MODEL) -> Optional[str]:
+def _call_ollama(prompt: str, model: str = DEFAULT_MODEL, system: str = "") -> Optional[str]:
     """Make a request to the local Ollama API."""
-    payload = json.dumps({
-        "model": model,
-        "prompt": prompt,
-        "stream": False
-    }).encode("utf-8")
+    body: Dict[str, Any] = {"model": model, "prompt": prompt, "stream": False}
+    if system:
+        body["system"] = system
+    payload = json.dumps(body).encode("utf-8")
 
     req = urllib.request.Request(
         OLLAMA_URL,
@@ -210,6 +204,23 @@ def _repair_json(raw: str) -> str:
     return raw
 
 
+def _is_prompt_leaked(text: str) -> bool:
+    """Return True if the model echoed back prompt instructions instead of following them."""
+    return "sentence" in text or "Include:" in text
+
+
+def _parse_raw_response(raw: str) -> Optional[Dict[str, Any]]:
+    """Strip fences, repair, and JSON-parse a model response. Returns None on failure."""
+    clean = raw.strip()
+    if clean.startswith("```"):
+        clean = clean.split("```")[1]
+        if clean.startswith("json"):
+            clean = clean[4:]
+    clean = clean.strip()
+    clean = _repair_json(clean)
+    return json.loads(clean)
+
+
 def summarize_conversation(
     convo: Dict[str, Any],
     model: str = DEFAULT_MODEL,
@@ -225,29 +236,40 @@ def summarize_conversation(
     if not text.strip():
         return None
 
-    prompt_template = (
-        SUMMARIZE_PROMPT_DETAILED if summary_style == "detailed" else SUMMARIZE_PROMPT_CONCISE
-    )
-    prompt = prompt_template.format(title=title, text=text)
-    raw = _call_ollama(prompt, model=model)
+    system_prompt = _SYSTEM_DETAILED if summary_style == "detailed" else _SYSTEM_CONCISE
+    user_prompt = _USER_PROMPT.format(title=title, text=text)
+
+    raw = _call_ollama(user_prompt, model=model, system=system_prompt)
 
     if not raw:
         return None
 
+    # Detect prompt leakage and retry with a simpler prompt
+    if _is_prompt_leaked(raw):
+        print(f"Prompt leakage detected for '{title}', retrying with simpler prompt.")
+        fallback_prompt = f"Summarize this conversation in 3 sentences.\n\n{text}"
+        raw = _call_ollama(fallback_prompt, model=model)
+        if not raw:
+            return None
+        # Wrap plain-text fallback in the expected JSON structure
+        result = {
+            "summary": raw.strip(),
+            "key_decisions": [],
+            "open_threads": [],
+            "topics": [],
+            "artifacts": [],
+            "preferences": [],
+            "bucket": "General",
+        }
+        result["title"] = title
+        result["conversation_id"] = convo.get("id", "")
+        result["created"] = convo.get("created", "")
+        result["updated"] = convo.get("updated", "")
+        return result
+
     # Parse JSON response
     try:
-        # Strip markdown code fences if model wrapped response
-        clean = raw.strip()
-        if clean.startswith("```"):
-            clean = clean.split("```")[1]
-            if clean.startswith("json"):
-                clean = clean[4:]
-        clean = clean.strip()
-
-        # Attempt to repair truncated JSON
-        clean = _repair_json(clean)
-
-        result = json.loads(clean)
+        result = _parse_raw_response(raw)
         result["title"] = title
         result["conversation_id"] = convo.get("id", "")
         result["created"] = convo.get("created", "")
