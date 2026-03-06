@@ -5,6 +5,8 @@ Launches a local Gradio UI — no internet connection required.
 """
 
 import os
+import shutil
+import tempfile
 
 # ── Privacy: disable all huggingface and gradio telemetry ────────────────────
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
@@ -139,8 +141,15 @@ def handle_upload(zip_file):
             _hidden, _empty_df, _no_count,
         )
     try:
-        zip_path = Path(zip_file)
-        conversations = load_from_zip(zip_path)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+                shutil.copy2(zip_file, tmp.name)
+                tmp_path = tmp.name
+            conversations = load_from_zip(Path(tmp_path))
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
         state["conversations"] = conversations
         state["summaries"] = []
         state["grouped"] = {}
