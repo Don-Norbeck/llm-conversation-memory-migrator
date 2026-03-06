@@ -21,12 +21,19 @@ Extract and return ONLY a JSON object with these fields:
 {{
   "topics": ["list", "of", "main", "topics"],
   "summary": "4-6 sentence summary. Include: specific names of people, companies, tools, or frameworks mentioned; specific decisions made and conclusions reached; specific file names, project names, or artifacts created; and any open questions or unresolved threads.",
-  "key_decisions": ["important decisions or conclusions reached"],
+  "key_decisions": ["each entry must name a real decision from this conversation — e.g. 'Chose FastAPI over Flask for the backend'"],
   "artifacts": ["code, documents, frameworks, or other outputs created — use specific names"],
-  "open_threads": ["unresolved questions or next steps mentioned"],
+  "open_threads": ["each entry must name a real unresolved question or next step from this conversation — e.g. 'Still needs to configure the database connection'"],
   "preferences": ["user preferences, style notes, or behavioral patterns observed"],
   "bucket": "single best category from the list below"
 }}
+
+RULES — violations will make the output useless:
+- NEVER write generic placeholder text such as "important decisions or conclusions reached", "unresolved questions or next steps mentioned", or any similar vague filler.
+- NEVER copy the field description into the value.
+- If no specific content exists for a field, write an empty array [] — do NOT invent placeholders.
+- Always use actual names, actual decisions, actual topics from the conversation text.
+- Be specific. Vague entries are not acceptable.
 
 Bucket definitions — pick the single best match:
 - Work & Career: jobs, resumes, interviews, career planning, professional networking, LinkedIn
@@ -54,12 +61,19 @@ Extract and return ONLY a JSON object with these fields:
 {{
   "topics": ["list", "of", "main", "topics"],
   "summary": "Write 8-20 bullet points (as a single string, each bullet on its own line starting with '• '). Cover: specific names of people, companies, tools, and frameworks mentioned; every specific decision made and conclusion reached; every specific file name, project name, or artifact created; all open questions and unresolved threads; and any notable context or background established.",
-  "key_decisions": ["important decisions or conclusions reached — be specific"],
+  "key_decisions": ["each entry must name a real decision from this conversation — e.g. 'Chose FastAPI over Flask for the backend'"],
   "artifacts": ["code, documents, frameworks, or other outputs created — use specific names"],
-  "open_threads": ["unresolved questions or next steps mentioned"],
+  "open_threads": ["each entry must name a real unresolved question or next step from this conversation — e.g. 'Still needs to configure the database connection'"],
   "preferences": ["user preferences, style notes, or behavioral patterns observed"],
   "bucket": "single best category from the list below"
 }}
+
+RULES — violations will make the output useless:
+- NEVER write generic placeholder text such as "important decisions or conclusions reached", "unresolved questions or next steps mentioned", or any similar vague filler.
+- NEVER copy the field description into the value.
+- If no specific content exists for a field, write an empty array [] — do NOT invent placeholders.
+- Always use actual names, actual decisions, actual topics from the conversation text.
+- Be specific. Vague entries are not acceptable.
 
 Bucket definitions — pick the single best match:
 - Work & Career: jobs, resumes, interviews, career planning, professional networking, LinkedIn

@@ -672,10 +672,12 @@ def build_ui():
                 placeholder="e.g. Don"
             )
 
-            ollama_model_input = gr.Textbox(
+            ollama_model_input = gr.Dropdown(
                 label="Ollama model",
+                choices=["llama3.2", "llama3.1:8b", "mistral"],
                 value=cfg.get("ollama_model", "llama3.2"),
-                placeholder="llama3.2"
+                allow_custom_value=True,
+                info="llama3.2 = fastest · llama3.1:8b = better quality · mistral = alternative. Type any model name to use a custom one.",
             )
 
             ollama_url_input = gr.Textbox(
