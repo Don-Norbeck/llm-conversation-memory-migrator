@@ -720,7 +720,7 @@ Detected Topics:
         var email = document.getElementById('waitlist-email').value.trim();
         var msg = document.getElementById('waitlist-msg');
         try {
-          var res = await fetch('https://darkaidefense.com/mail.php', {
+          var res = await fetch('https://darkaidefense.com/wp-json/ownyourcontext/v1/waitlist', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: email })
