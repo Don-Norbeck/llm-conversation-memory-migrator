@@ -476,46 +476,7 @@
       line-height: 1.6;
     }
 
-    .waitlist-form {
-      display: flex;
-      gap: 0;
-      max-width: 480px;
-      margin: 0 auto;
-    }
-
-    .waitlist-form input {
-      flex: 1;
-      background: var(--dark);
-      border: 1px solid var(--border);
-      border-right: none;
-      color: var(--text);
-      font-family: 'Space Mono', monospace;
-      font-size: 13px;
-      padding: 14px 20px;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-
-    .waitlist-form input:focus { border-color: var(--orange); }
-    .waitlist-form input::placeholder { color: var(--text-dim); }
-
-    .waitlist-form button {
-      background: var(--orange);
-      color: #000;
-      border: none;
-      font-family: 'Space Mono', monospace;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-      padding: 14px 24px;
-      cursor: pointer;
-      transition: background 0.2s;
-      white-space: nowrap;
-    }
-
-    .waitlist-form button:hover { background: #fff; }
-
-    .privacy-note {
+.privacy-note {
       font-family: 'Space Mono', monospace;
       font-size: 10px;
       color: var(--text-dim);
@@ -585,9 +546,7 @@
       section { padding: 60px 20px; }
       .stats-bar { padding: 20px; }
       .stat { padding: 8px 24px; }
-      .waitlist-form { flex-direction: column; }
-      .waitlist-form input { border-right: 1px solid var(--border); border-bottom: none; }
-      footer { padding: 24px 20px; }
+footer { padding: 24px 20px; }
     }
   </style>
 </head>
@@ -735,13 +694,12 @@ Detected Topics:
 <section id="waitlist" style="padding: 0 40px 100px;">
   <div class="waitlist-section">
     <h2>Get Notified<br><span style="color:var(--orange)">When v0.2 Ships</span></h2>
-    <p>Conversation selection, richer summaries, and export improvements. Leave your email and we'll let you know when it's ready.</p>
-    <div class="waitlist-form">
-      <input type="email" placeholder="your@email.com" id="waitlist-email" />
-      <button onclick="handleWaitlist()">NOTIFY ME</button>
+    <p>Conversation selection, richer summaries, and export improvements. No accounts. No email. Just open source.</p>
+    <div style="margin: 0 auto; max-width: 480px;">
+      <a href="https://github.com/Don-Norbeck/llm-conversation-memory-migrator/issues/new?title=Waitlist:+Notify+me+when+v0.2+ships&body=Please+notify+me+when+v0.2+is+available." target="_blank" rel="noopener" class="btn-primary" style="display:inline-flex; margin-bottom:20px;">→ Join the Waitlist on GitHub</a>
+      <p style="color:var(--text-dim); font-size:14px; font-family:'Space Mono',monospace; letter-spacing:0.03em;">Power user? <a href="https://github.com/Don-Norbeck/llm-conversation-memory-migrator" target="_blank" rel="noopener" style="color:var(--orange); text-decoration:none;">Star the repo</a> to get notified automatically.</p>
     </div>
-    <p class="privacy-note">// no spam. no tracking. one email when v0.2 ships.</p>
-    <p class="privacy-note" id="waitlist-msg" style="color:var(--teal); margin-top:12px;"></p>
+    <p class="privacy-note">// no accounts. no email lists. no tracking. ever.</p>
   </div>
 </section>
 
@@ -756,20 +714,6 @@ Detected Topics:
   </div>
 </footer>
 
-<script>
-function handleWaitlist() {
-  const email = document.getElementById('waitlist-email').value;
-  const msg = document.getElementById('waitlist-msg');
-  if (!email || !email.includes('@')) {
-    msg.style.color = 'var(--orange)';
-    msg.textContent = '// please enter a valid email address';
-    return;
-  }
-  msg.style.color = 'var(--teal)';
-  msg.textContent = '// got it. you\'ll hear from us when v0.2 ships.';
-  document.getElementById('waitlist-email').value = '';
-}
-</script>
 
 </body>
 </html>
