@@ -442,17 +442,21 @@ Built by \[Don Norbeck](https://darkaidefense.com) — because your accumulated 
 - [x] Temp file cleanup after parsing — no conversation data left on disk
 - [x] Tested on 489 real conversations — 98% success rate, 5/5 recall
 
-**v0.2 — Quality & Review**
-- [ ] Review tab expanded — show all conversations with current bucket assignment
-- [ ] Individual conversation reassignment to a different bucket
-- [ ] Search and filter conversations by title or keyword
-- [ ] Expanded summaries — 4-6 sentences or 8-20 bullet points (user choice)
-- [ ] Increase conversation context window for richer detail capture
+**v0.2 — Quality & Review (Sprint Plan)**
+
+Sprint 1 — Browse Tab
+- [ ] Display all conversations in a sortable list after upload
+- [ ] Columns: checkbox, title, date, word count
+- [ ] Sort by date, size, or title
+- [ ] Select all / deselect all
+- [ ] Date range filter
+
+Sprint 2 — Summary Quality and Export Fixes
+- [ ] Expand summaries to 4-6 sentences or 8-20 bullet points (user choice in Settings)
 - [ ] Capture specific names, decisions, tools, and file names in summaries
-- [ ] Cross-conversation synthesis pass — topic graph and intellectual centers
 - [ ] Target ~5000 words per exported context file
-- [ ] Rename full_context.md — remove legacy terminology
 - [ ] Fix filename sanitization — Work_and_Career not Work___Career
+- [ ] Rename master_context.md to full_context.md
 - [ ] Fix grammar — "1 conversations" → "1 conversation"
 - [ ] Checkpoint and resume — save progress, continue interrupted analysis
 - [ ] Startup cleanup of leftover temp files from unclean shutdown
@@ -460,6 +464,17 @@ Built by \[Don Norbeck](https://darkaidefense.com) — because your accumulated 
 - [ ] Versioned exports — no silent overwrites
 - [ ] Shutdown button in UI
 - [ ] Test mode — analyze first 10 conversations only
+
+Sprint 3 — Selective Analysis
+- [ ] Pass only selected conversations from Browse tab to analyzer
+- [ ] Skip unselected conversations entirely
+- [ ] Update progress bar to reflect selected count not total
+
+Sprint 4 — Review Tab Rebuild
+- [ ] Show all summarized conversations with current bucket assignment
+- [ ] Checkbox select one or many conversations
+- [ ] Dropdown to reassign selected conversations to existing or new bucket
+- [ ] Confirm button applies reassignment
 
 **v0.3 — Any LLM → Any LLM**
 - [ ] Claude export adapter
