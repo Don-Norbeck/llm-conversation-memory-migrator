@@ -5,6 +5,7 @@ Cleans up temporary files after parsing to protect user privacy.
 """
 
 import json
+import re
 import zipfile
 import shutil
 from pathlib import Path
@@ -52,8 +53,19 @@ def parse_conversation(convo: Dict) -> Dict[str, Any]:
         role = msg.get("author", {}).get("role", "unknown")
         if role not in ("user", "assistant"):
             continue
+        if msg.get("weight") == 0.0:
+            continue
+        metadata = msg.get("metadata", {})
+        if metadata.get("is_visually_hidden_from_conversation") is True:
+            continue
+        if metadata.get("image_gen_async") is True:
+            continue
+        if metadata.get("ui_card") is True:
+            continue
         ts = msg.get("create_time") or 0
         text = get_message_text(msg)
+        if role == "assistant":
+            text = re.sub(r'[\ue200-\ue2ff]', '', text)
         if text.strip():
             messages.append({
                 "role": role,
@@ -91,7 +103,9 @@ def extract_zip(zip_path: Path) -> Path:
                     print(f"Skipping {member.filename}: {e}")
         print("Extraction complete.")
     else:
-        print("Using existing extracted files.")
+        print(f"[warn] partial extraction reused for '{zip_path.name}': "
+              f"{len(existing)} file(s) found in {extract_dir}. "
+              f"Delete that folder and re-upload to force a clean extraction.")
     return extract_dir
 
 

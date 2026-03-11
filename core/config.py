@@ -40,6 +40,8 @@ def load_config() -> dict:
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
+            print(f"[config] Loading: {CONFIG_FILE}")
+            print(f"[config] Raw dict: {saved}")
             config.update(saved)
         except Exception as e:
             print(f"Warning: Could not load config: {e}. Using defaults.")
@@ -85,8 +87,8 @@ def get_ollama_config() -> dict:
     """Return Ollama connection config."""
     config = load_config()
     return {
-        "model": config["ollama_model"],
-        "url": config["ollama_url"],
+        "model": config.get("ollama_model", DEFAULTS["ollama_model"]),
+        "url": config.get("ollama_url", DEFAULTS["ollama_url"]),
     }
 
 

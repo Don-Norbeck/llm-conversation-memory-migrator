@@ -5,6 +5,8 @@ Uses Ollama (local) to summarize individual conversations.
 """
 
 import json
+import os
+import re
 import urllib.request
 import urllib.error
 from typing import Dict, Any, Optional
@@ -15,83 +17,222 @@ from typing import Dict, Any, Optional
 OLLAMA_URL = "http://localhost:11434/api/generate"
 DEFAULT_MODEL = "llama3.2"
 
-# System messages contain instructions only — no conversation content.
-# The conversation text is passed separately as the user prompt.
+# ── Biographer prompts ────────────────────────────────────────────────────────
 
-_SYSTEM_CONCISE = """\
-You are analyzing a conversation between a user and an AI assistant.
+PRIME_PROMPT = """\
+You are a biographer.
 
-Extract and return ONLY a JSON object with these fields:
-{
-  "topics": ["list", "of", "main", "topics"],
-  "summary": "4-6 sentence summary covering specific names of people, companies, tools, or frameworks mentioned; decisions made; file or project names created; and open questions.",
-  "key_decisions": ["each entry must name a real decision from this conversation, e.g. Chose FastAPI over Flask for the backend"],
-  "artifacts": ["code, documents, frameworks, or other outputs created — use specific names"],
-  "open_threads": ["each entry must name a real unresolved question or next step, e.g. Still needs to configure the database connection"],
-  "preferences": ["user preferences, style notes, or behavioral patterns observed"],
-  "bucket": "single best category from the list below"
+You have been given a collection of conversations between one person \
+and another AI over an extended period of time. You are not that AI. \
+You have no prior relationship with this person. You are reading \
+the record cold.
+
+Your job is to build an accurate, specific portrait of that person \
+across three dimensions:
+
+WHO they are — their identity, background, expertise, credentials, \
+relationships, and any additional personal context they chose to share.
+
+WHAT they care about — the domains, projects, problems, and ideas \
+they conversed about. What they built, decided, and explored.
+
+HOW they think and communicate — their pace, tone, corrections \
+for the AI, their pivots, the phrases that sound distinctly like \
+them, the patterns in how they develop and express ideas.
+
+Rules:
+- Use only evidence from the conversations. Never invent.
+- Specific beats general. A project name beats 'technical work.'
+- Their exact words beat your paraphrase. Capture verbatim phrases.
+- Corrections and pushback are as revealing as requests.
+- Absence of evidence is not evidence. Return empty rather than invented."""
+
+_EXTRACTION_PASS = """\
+You are extracting structured signals from a single AI conversation.
+Extract only what is explicitly present. Return empty strings or empty
+arrays if content is not present. Never invent or infer.
+
+Extract the following:
+
+WHO (identity signals only):
+- role: their job title or professional identity if stated
+- expertise: domains they demonstrated fluency in — they taught, led,
+  or used without explanation
+- credentials: companies, tools, certifications, projects named
+- personal: explicit self-disclosures only (I live in..., I am a...,
+  my family...) — never third-party details
+
+WHAT (topic and depth):
+- topic: the primary subject of this conversation in 5 words or fewer
+- depth: surface / working / expert — how deep did they go
+- project: named project if one exists, otherwise empty
+- outcome: what was resolved, created, or left open — one sentence,
+  no filler
+- open_thread: unresolved question or next step if explicitly stated
+
+HOW (working style signals):
+- initial_prompt: the user's first message or opening ask —
+  quote verbatim, max 20 words
+- corrections: array of explicit corrections or redirections the user
+  made — "not that", "reprint without", "less formal", "tell me more
+  about X" — verbatim where possible, empty array if none
+- your_words: 1-2 verbatim phrases from the user that best capture
+  their voice and framing — must be the user's words, never the AI's
+
+TIER:
+- signal: has a named project, recurring domain, or open thread
+- noise: one-off lookup, no project, no open thread, reveals nothing
+  about WHO
+- review: ambiguous
+
+Return valid JSON only. No commentary. No markdown. No explanation.
+{{
+  "who": {{
+    "role": "",
+    "expertise": [],
+    "credentials": [],
+    "personal": []
+  }},
+  "what": {{
+    "topic": "",
+    "depth": "",
+    "project": "",
+    "outcome": "",
+    "open_thread": ""
+  }},
+  "how": {{
+    "initial_prompt": "",
+    "corrections": [],
+    "your_words": []
+  }},
+  "tier": "signal | review | noise"
+}}
+
+FULL CONVERSATION:
+{full_conversation}
+
+HUMAN MESSAGES ONLY:
+{human_messages_only}"""
+
+_SYNTHESIS_PASS_V2 = """\
+You are writing a warm handoff document for a new AI assistant.
+Your job is to help the new AI skip the cold start and feel like
+it already knows this person.
+
+You will receive structured extractions from {n} conversations.
+Write a concise, useful brief — not a data dump.
+
+Rules:
+- Maximum 5 items per section
+- Only include what appears in 3 or more conversations OR is
+  explicitly high signal (named project, strong correction,
+  distinctive phrase)
+- Never use placeholder language — if you don't have real content,
+  omit the section entirely
+- Never list the AI's responses — only what the human said and did
+- Write WHO and WHAT summaries as 2-3 sentence narratives, not lists
+- Keep the total document under 500 words
+
+Use this exact structure:
+
+## Who
+[2-3 sentence narrative: who this person is, what they do,
+what drives them. Use their own words where possible.]
+
+**Name:** {name}
+**Role:** [most frequent or most specific role signal]
+**Based in:** [location if explicitly stated, otherwise omit]
+**Credentials:** [top 3-5 only — companies, patents, civic roles]
+
+## What They Work On
+[2-3 sentence narrative: their main domains and current focus]
+
+**Active Projects:**
+[List only projects appearing in 2+ conversations, with one-line
+outcome. Maximum 5.]
+
+**Open Threads:**
+[List only unresolved questions or next steps. Maximum 3.]
+
+## How To Work With Them
+[2-3 sentence narrative: communication style, pace, what they value]
+
+**Say this, not that:**
+[Top 3-5 correction patterns verbatim — what they pushed back on
+and what they wanted instead. Format: "not X → Y"]
+
+**Their words:**
+[Top 5 verbatim phrases that best capture their voice.
+Must be the human's words, never the AI's.
+Prefer distinctive framings over generic statements.]
+
+## Don't Do This
+[Bullet list of 3-5 explicit negative preferences extracted from
+corrections — things they have pushed back on repeatedly.
+Examples: no em dashes, no bullet points, less formal, etc.]
+
+Extractions:
+{extractions_json}"""
+
+_VALID_BUCKETS = {
+    "Work & Career", "Creative Projects", "Technical & Coding",
+    "Research & Learning", "Health & Wellness", "Personal & Family",
+    "Finance & Legal", "Hobbies & Interests", "Travel & Planning", "General",
 }
 
-RULES:
-- NEVER write generic placeholder text such as important decisions or conclusions reached.
-- NEVER copy the field description into the value.
-- If no specific content exists for a field, write an empty array [] — do NOT invent placeholders.
-- Always use actual names, actual decisions, actual topics from the conversation text.
+# ── Aggregation filters ───────────────────────────────────────────────────────
 
-Bucket definitions — pick the single best match:
-- Work & Career: jobs, resumes, interviews, career planning, professional networking, LinkedIn
-- Creative Projects: writing, design, art, music, games, creative tools, storytelling
-- Technical & Coding: code, programming, scripts, software, hardware, AI projects, local AI setup
-- Research & Learning: articles, research, education, learning new topics, summaries
-- Health & Wellness: medical, fitness, diet, mental health, diabetes, medications
-- Personal & Family: family, relationships, personal life, home, civic involvement
-- Finance & Legal: money, taxes, legal questions, budgeting, contracts
-- Hobbies & Interests: sports, collecting, skiing, vinyl records, sneakers, cards, cooking, games
-- Travel & Planning: trips, destinations, travel logistics, hotels, flights
-- General: anything that does not clearly fit the above categories
+_PERSONAL_SKIP_VALUES = frozenset({
+    "null", "none", "n/a", "not mentioned", "not applicable",
+    "unknown", "not specified", "n/a.",
+})
+_PERSONAL_NOISE_TERMS = frozenset({"feminine", "diaper", "pad"})
 
-Respond with valid JSON only. Do not repeat these instructions. Do not include any text outside the JSON object."""
+# ── FIX 2: Genealogy / third-party heritage noise filter ─────────────────────
+# These signal the personal context is about someone being *researched*,
+# not self-disclosed by the human.
+_PERSONAL_GENEALOGY_TERMS = frozenset({
+    "born in", "village", "province", "guangdong", "canton", "fujian",
+    "ancestry", "heritage", "genealogy", "passed away", "who passed",
+    "emigrated", "immigrated", "maiden name", "née", "baptized",
+    "christened", "buried", "interred", "death certificate",
+    "birth certificate", "immigration record", "ship manifest",
+    "taishan", "lishan", "ancestral", "hometown",
+})
 
-_SYSTEM_DETAILED = """\
-You are analyzing a conversation between a user and an AI assistant.
+_CRED_NOISE_RE = re.compile(
+    r'\b\d{3,}\b'
+    r'|\b(?:chrome|firefox|safari|edge|opera|brave)\b'
+    r'|\b(?:windows\s?\d*|macos|mac\s?os(?:\s?x)?|ubuntu|debian|linux|android|ios)\b'
+    r'|\b\d+\s*(?:gb|mb|tb|ghz|mhz)\b'
+    r'|\b(?:inurl|intitle|site|filetype):'
+    , re.IGNORECASE
+)
 
-Extract and return ONLY a JSON object with these fields:
-{
-  "topics": ["list", "of", "main", "topics"],
-  "summary": "Write 8-20 bullet points as a single string, each bullet on its own line starting with a bullet character. Cover specific names of people, companies, tools, and frameworks mentioned; every decision made; every file or project name created; all open questions; and any notable context established.",
-  "key_decisions": ["each entry must name a real decision from this conversation, e.g. Chose FastAPI over Flask for the backend"],
-  "artifacts": ["code, documents, frameworks, or other outputs created — use specific names"],
-  "open_threads": ["each entry must name a real unresolved question or next step, e.g. Still needs to configure the database connection"],
-  "preferences": ["user preferences, style notes, or behavioral patterns observed"],
-  "bucket": "single best category from the list below"
-}
+_PROJECT_NOISE = frozenset({"null", "none", "none mentioned", "not mentioned", "n/a"})
 
-RULES:
-- NEVER write generic placeholder text such as important decisions or conclusions reached.
-- NEVER copy the field description into the value.
-- If no specific content exists for a field, write an empty array [] — do NOT invent placeholders.
-- Always use actual names, actual decisions, actual topics from the conversation text.
+_PERSONAL_SKIP_EXACT = frozenset({
+    "married", "children", "neighbor", "location not specified",
+    "no personal context shared", "no personal context",
+    "no personal context mentioned", "location unknown",
+    "silicon valley",
+})
 
-Bucket definitions — pick the single best match:
-- Work & Career: jobs, resumes, interviews, career planning, professional networking, LinkedIn
-- Creative Projects: writing, design, art, music, games, creative tools, storytelling
-- Technical & Coding: code, programming, scripts, software, hardware, AI projects, local AI setup
-- Research & Learning: articles, research, education, learning new topics, summaries
-- Health & Wellness: medical, fitness, diet, mental health, diabetes, medications
-- Personal & Family: family, relationships, personal life, home, civic involvement
-- Finance & Legal: money, taxes, legal questions, budgeting, contracts
-- Hobbies & Interests: sports, collecting, skiing, vinyl records, sneakers, cards, cooking, games
-- Travel & Planning: trips, destinations, travel logistics, hotels, flights
-- General: anything that does not clearly fit the above categories
+_PERSONAL_NAME_RE = re.compile(r'^[A-Z][a-z]+(?: [A-Z][a-z]+)?$')
 
-Respond with valid JSON only. Do not repeat these instructions. Do not include any text outside the JSON object."""
+_PERSONAL_BEHAVIORAL_TERMS = frozenset({
+    "slowdown", "double-check", "double check", "assumptions", "inferences",
+    "slow down",
+})
 
-_USER_PROMPT = "Conversation title: {title}\n\nConversation:\n{text}"
+_PERSONAL_HARDWARE_RE = re.compile(
+    r'\b(?:dell|xps|thinkpad|latitude|inspiron|pavilion|macbook|surface|lenovo|hp\s+\w+)\b'
+    r'|\b\d{4,}\b',
+    re.IGNORECASE
+)
 
-# Legacy alias kept for any external callers
-SUMMARIZE_PROMPT_CONCISE = _SYSTEM_CONCISE + "\n\n" + _USER_PROMPT
-SUMMARIZE_PROMPT_DETAILED = _SYSTEM_DETAILED + "\n\n" + _USER_PROMPT
-SUMMARIZE_PROMPT = SUMMARIZE_PROMPT_CONCISE
+# ── Email noise filter ────────────────────────────────────────────────────────
+_EMAIL_RE = re.compile(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}')
 
 
 def _call_ollama(prompt: str, model: str = DEFAULT_MODEL, system: str = "") -> Optional[str]:
@@ -109,7 +250,7 @@ def _call_ollama(prompt: str, model: str = DEFAULT_MODEL, system: str = "") -> O
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=300) as response:
+        with urllib.request.urlopen(req, timeout=600) as response:
             result = json.loads(response.read().decode("utf-8"))
             return result.get("response", "")
     except urllib.error.URLError as e:
@@ -121,48 +262,42 @@ def _call_ollama(prompt: str, model: str = DEFAULT_MODEL, system: str = "") -> O
         return None
 
 
-def _truncate_conversation(convo: Dict[str, Any], max_chars: int = 6000) -> str:
-    """
-    Convert conversation messages to text, truncated to max_chars.
-    Keeps first and last messages to preserve context bookends.
-    """
+def _build_conversation_texts(convo: Dict[str, Any], max_chars: int = 6000) -> tuple:
     messages = convo.get("messages", [])
     if not messages:
-        return ""
+        return "", ""
 
-    lines = []
+    full_lines = []
+    human_lines = []
     for msg in messages:
         role = "User" if msg["role"] == "user" else "Assistant"
-        lines.append(f"{role}: {msg['text'][:500]}")
+        snippet = msg["text"][:500]
+        full_lines.append(f"{role}: {snippet}")
+        if msg["role"] == "user":
+            human_lines.append(f"User: {snippet}")
 
-    full_text = "\n".join(lines)
-    if len(full_text) <= max_chars:
-        return full_text
+    full_text = "\n".join(full_lines)
+    human_text = "\n".join(human_lines)
 
-    # Truncate middle, keep start and end
-    half = max_chars // 2
-    return full_text[:half] + "\n\n[... truncated ...]\n\n" + full_text[-half:]
+    if len(full_text) > max_chars:
+        half = max_chars // 2
+        full_text = full_text[:half] + "\n\n[... truncated ...]\n\n" + full_text[-half:]
+
+    human_max = max_chars // 2
+    if len(human_text) > human_max:
+        half = human_max // 2
+        human_text = human_text[:half] + "\n\n[... truncated ...]\n\n" + human_text[-half:]
+
+    return full_text, human_text
 
 
 def _repair_json(raw: str) -> str:
-    """
-    Attempt to repair truncated JSON responses from Llama.
-    Handles the most common failure mode: response cut off mid-string.
-    """
-    # If it doesn't start with { something is very wrong
     if not raw.startswith("{"):
         idx = raw.find("{")
         if idx == -1:
             return raw
         raw = raw[idx:]
 
-    # Close any open strings by tracking unescaped structural quotes.
-    # A simple toggle breaks when LLM outputs unescaped inner quotes inside
-    # string values (e.g. `"the "pre-AI internet" era"`).  Instead, when we
-    # are already inside a string and hit a `"`, peek at the next non-whitespace
-    # character: if it looks like a JSON delimiter (`,`, `}`, `]`, `:`, `"`) or
-    # we are at end-of-input, treat it as a real string-closer; otherwise treat
-    # it as an unescaped content quote and stay inside the string.
     in_string = False
     escaped = False
     i = 0
@@ -181,20 +316,17 @@ def _repair_json(raw: str) -> str:
             if not in_string:
                 in_string = True
             else:
-                # Look past whitespace to find the next structural character.
                 j = i + 1
                 while j < n and raw[j] in ' \t\r\n':
                     j += 1
                 next_char = raw[j] if j < n else ''
                 if next_char in ',}]:"' or j >= n:
-                    in_string = False  # proper string closer
-                # else: unescaped inner quote — remain in_string
+                    in_string = False
         i += 1
 
     if in_string:
         raw += '"'
 
-    # Close open arrays and objects
     open_brackets = raw.count('[') - raw.count(']')
     open_braces = raw.count('{') - raw.count('}')
 
@@ -205,20 +337,22 @@ def _repair_json(raw: str) -> str:
 
 
 def _is_prompt_leaked(text: str) -> bool:
-    """Return True if the model echoed back prompt instructions instead of following them."""
     return "sentence" in text or "Include:" in text
 
 
 def _parse_raw_response(raw: str) -> Optional[Dict[str, Any]]:
-    """Strip fences, repair, and JSON-parse a model response. Returns None on failure."""
-    clean = raw.strip()
-    if clean.startswith("```"):
-        clean = clean.split("```")[1]
-        if clean.startswith("json"):
-            clean = clean[4:]
+    clean = re.sub(r'^```json\s*|\s*```$', '', raw.strip())
     clean = clean.strip()
     clean = _repair_json(clean)
-    return json.loads(clean)
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        try:
+            from json_repair import repair_json
+            clean = repair_json(clean)
+        except ImportError:
+            pass
+        return json.loads(clean)
 
 
 def summarize_conversation(
@@ -226,59 +360,353 @@ def summarize_conversation(
     model: str = DEFAULT_MODEL,
     summary_style: str = "concise",
 ) -> Optional[Dict[str, Any]]:
-    """
-    Summarize a single normalized conversation using local Ollama.
-    Returns a dict with summary fields, or None if summarization failed.
-    """
     title = convo.get("title", "Untitled")
-    text = _truncate_conversation(convo)
+    full_text, human_text = _build_conversation_texts(convo)
 
-    if not text.strip():
+    if not full_text.strip():
         return None
 
-    system_prompt = _SYSTEM_DETAILED if summary_style == "detailed" else _SYSTEM_CONCISE
-    user_prompt = _USER_PROMPT.format(title=title, text=text)
+    full_conversation = f"Title: {title}\n\n{full_text}"
+    human_messages_only = f"Title: {title}\n\n{human_text}" if human_text.strip() else "(none)"
+    user_prompt = _EXTRACTION_PASS.format(
+        full_conversation=full_conversation,
+        human_messages_only=human_messages_only,
+    )
 
-    raw = _call_ollama(user_prompt, model=model, system=system_prompt)
+    raw = _call_ollama(user_prompt, model=model, system=PRIME_PROMPT)
 
     if not raw:
         return None
 
-    # Detect prompt leakage and retry with a simpler prompt
     if _is_prompt_leaked(raw):
-        print(f"Prompt leakage detected for '{title}', retrying with simpler prompt.")
-        fallback_prompt = f"Summarize this conversation in 3 sentences.\n\n{text}"
-        raw = _call_ollama(fallback_prompt, model=model)
-        if not raw:
-            return None
-        # Wrap plain-text fallback in the expected JSON structure
+        print(f"Prompt leakage detected for '{title}', using fallback extraction.")
         result = {
-            "summary": raw.strip(),
-            "key_decisions": [],
-            "open_threads": [],
-            "topics": [],
-            "artifacts": [],
-            "preferences": [],
-            "bucket": "General",
+            "tier": "review",
+            "who": {"role": None, "expertise": [], "credentials": [], "personal": []},
+            "what": {"topic": title[:40], "depth": "", "project": None, "outcome": title, "open_thread": None},
+            "how": {"initial_prompt": "", "corrections": [], "your_words": []},
         }
-        result["title"] = title
-        result["conversation_id"] = convo.get("id", "")
-        result["created"] = convo.get("created", "")
-        result["updated"] = convo.get("updated", "")
-        return result
+    else:
+        try:
+            result = _parse_raw_response(raw)
+        except json.JSONDecodeError as e:
+            print(f"JSON parse failed for '{title}': {e}")
+            print(f"Raw response snippet: {raw[:200]}")
+            result = {
+                "tier": "review",
+                "who": {"role": None, "expertise": [], "credentials": [], "personal": []},
+                "what": {"topic": title, "depth": "", "project": None, "outcome": "Could not parse", "open_thread": None},
+                "how": {"initial_prompt": "", "corrections": [], "your_words": []},
+            }
 
-    # Parse JSON response
-    try:
-        result = _parse_raw_response(raw)
-        result["title"] = title
-        result["conversation_id"] = convo.get("id", "")
-        result["created"] = convo.get("created", "")
-        result["updated"] = convo.get("updated", "")
-        return result
-    except json.JSONDecodeError as e:
-        print(f"Failed to parse summary JSON for '{title}': {e}")
-        print(f"Raw response: {raw[:200]}")
+    # ── FIX 1: Normalize top-level keys to lowercase ──────────────────────────
+    # Llama sometimes returns WHO/WHAT/HOW in uppercase. The aggregation loop
+    # in synthesize_biography() expects lowercase keys. This normalizes all
+    # top-level keys so who/what/how/tier/bucket are always lowercase.
+    # Guard against model returning a list instead of an object.
+    if isinstance(result, list):
+        result = result[0] if result else {}
+    if not isinstance(result, dict):
+        result = {}
+    result = {k.lower(): v for k, v in result.items()}
+
+    # Also normalize nested keys in who/what/how blocks
+    for block in ("who", "what", "how"):
+        if isinstance(result.get(block), dict):
+            result[block] = {k.lower(): v for k, v in result[block].items()}
+
+    result["bucket"] = "General"
+
+    # Rule-based tier scoring — replaces LLM tier classification
+    score = 0
+    who_block = result.get("who") or {}
+    what_block = result.get("what") or {}
+    how_block = result.get("how") or {}
+
+    if isinstance(who_block.get("role"), str) and len(who_block["role"].strip()) > 3:
+        score += 2
+    if isinstance(who_block.get("expertise"), list) and len(who_block["expertise"]) > 0:
+        score += 2
+    if isinstance(what_block.get("project"), str) and len(what_block["project"].strip()) > 3:
+        score += 2
+    if isinstance(what_block.get("open_thread"), str) and len(what_block["open_thread"].strip()) > 3:
+        score += 1
+    your_words = (how_block.get("your_words") or "")
+    if isinstance(your_words, str) and len(your_words.strip()) > 10:
+        score += 1
+    if isinstance(who_block.get("personal"), list) and len(who_block["personal"]) > 0:
+        score += 1
+
+    if score >= 3:
+        result["tier"] = "signal"
+    elif score >= 1:
+        result["tier"] = "review"
+    else:
+        result["tier"] = "noise"
+
+    # Legacy compatibility fields
+    result["title"] = title
+    result["conversation_id"] = convo.get("id", "")
+    result["created"] = convo.get("created", "")
+    result["updated"] = convo.get("updated", "")
+    result["summary"] = (result.get("what") or {}).get("outcome") or ""
+    result["topics"] = [(result.get("what") or {}).get("topic")] if (result.get("what") or {}).get("topic") else []
+    open_thread = (result.get("what") or {}).get("open_thread")
+    result["open_threads"] = [open_thread] if open_thread else []
+    result["key_decisions"] = []
+    result["artifacts"] = []
+    result["preferences"] = (result.get("how") or {}).get("corrections", [])
+
+    return result
+
+
+def synthesize_biography(
+    extractions: list,
+    output_dir,
+    model: str = DEFAULT_MODEL,
+    user_name: str = None,
+) -> Optional[Dict[str, Any]]:
+    from collections import Counter
+
+    print("[bio] synthesize_biography() called")
+    if not extractions:
         return None
+
+    expertise_counter: Counter = Counter()
+    credentials_counter: Counter = Counter()
+    your_words_list: list = []
+    corrections_list: list = []
+    personal_list: list = []
+    projects_map: dict = {}
+    open_threads_list: list = []
+    roles: list = []
+    tier_counts = {"signal": 0, "review": 0, "noise": 0}
+
+    _FIRST_PERSON_MARKERS = ("my name is", "i am", "i'm", "i've been", "my first name")
+    _CRED_ENTITY_BLOCKLIST = [
+        "axios", "fetch.ai", "columbia university",
+        "mayo clinic", "reuters", "techcrunch", "wired", "forbes",
+        "harvard", "mit", "stanford", "openai", "anthropic",
+        "google", "microsoft", "apple", "amazon", "meta",
+    ]
+    _YOUR_WORDS_SKIP_TERMS = ["diaper", "pad", "feminine", "menstrual", "period"]
+    _YOUR_WORDS_SKIP_PREFIXES = ("how many", "what is a")
+
+    if extractions and isinstance(extractions[0], dict):
+        print(f"[bio] first summary keys: {list(extractions[0].keys())}")
+    all_tier_values = set()
+    for ex in extractions:
+        if isinstance(ex, dict):
+            all_tier_values.add(ex.get("tier"))
+    print(f"[bio] unique tier values found: {all_tier_values}")
+    print(f"[bio] first 5 tier values: {[ex.get('tier') for ex in extractions[:5] if isinstance(ex, dict)]}")
+
+    for ex in extractions:
+        if not isinstance(ex, dict):
+            continue
+
+        tier_raw = ex.get("tier") or "review"
+        tier = tier_raw.strip().lower() if isinstance(tier_raw, str) else "review"
+        if tier in tier_counts:
+            tier_counts[tier] += 1
+
+        who = ex.get("who") or {}
+        if not isinstance(who, dict):
+            who = {}
+
+        for e in (who.get("expertise") if isinstance(who.get("expertise"), list) else []):
+            if isinstance(e, str) and e.strip():
+                expertise_counter[e.strip()] += 1
+
+        if tier == "signal":
+            for c in (who.get("credentials") if isinstance(who.get("credentials"), list) else []):
+                if not isinstance(c, str):
+                    continue
+                c = c.strip()
+                if not c or _CRED_NOISE_RE.search(c):
+                    continue
+                if any(bl in c.lower() for bl in _CRED_ENTITY_BLOCKLIST):
+                    continue
+                credentials_counter[c] += 1
+
+        # ── FIX 2: Personal context — filter genealogy / third-party heritage ─
+        for p in (who.get("personal") if isinstance(who.get("personal"), list) else []):
+            if not isinstance(p, str):
+                continue
+            p = p.strip()
+            if not p or p.lower() in _PERSONAL_SKIP_VALUES:
+                continue
+            if p.lower() in _PERSONAL_SKIP_EXACT:
+                continue
+            if len(p) < 5 or len(p) > 100:
+                continue
+            if any(noise in p.lower() for noise in _PERSONAL_NOISE_TERMS):
+                continue
+            # Filter genealogy / heritage research misattributions
+            if any(term in p.lower() for term in _PERSONAL_GENEALOGY_TERMS):
+                continue
+            # Filter email addresses
+            if _EMAIL_RE.search(p):
+                continue
+            if re.search(r'\b(?:husband|wife|spouse|partner)\s+of\b', p, re.IGNORECASE):
+                continue
+            if any(term in p.lower() for term in _PERSONAL_BEHAVIORAL_TERMS):
+                continue
+            if _PERSONAL_NAME_RE.match(p):
+                continue
+            if _PERSONAL_HARDWARE_RE.search(p):
+                continue
+            personal_list.append(p)
+
+        role = who.get("role")
+        if isinstance(role, str) and role.strip():
+            roles.append(role.strip())
+
+        how = ex.get("how") or {}
+        if not isinstance(how, dict):
+            how = {}
+
+        if tier == "signal":
+            for w in (how.get("your_words") if isinstance(how.get("your_words"), list) else []):
+                if not isinstance(w, str):
+                    continue
+                w = w.strip()
+                if not w:
+                    continue
+                if w.endswith("?"):
+                    continue
+                if len(w.split()) < 4:
+                    continue
+                if any(t in w.lower() for t in _YOUR_WORDS_SKIP_TERMS):
+                    continue
+                if w.lower().startswith(_YOUR_WORDS_SKIP_PREFIXES):
+                    continue
+                your_words_list.append(w)
+
+        for c in (how.get("corrections") if isinstance(how.get("corrections"), list) else []):
+            if isinstance(c, str) and c.strip():
+                corrections_list.append(c.strip())
+
+        what = ex.get("what") or {}
+        if not isinstance(what, dict):
+            what = {}
+
+        open_thread = what.get("open_thread")
+        if isinstance(open_thread, str) and open_thread.strip():
+            open_threads_list.append(open_thread.strip())
+
+        proj_name = what.get("project")
+        if isinstance(proj_name, str) and proj_name.strip():
+            pname = proj_name.strip()
+            if pname.lower() not in _PROJECT_NOISE:
+                if pname not in projects_map:
+                    projects_map[pname] = {
+                        "name": pname,
+                        "description": what.get("outcome") or "",
+                        "status": what.get("outcome") or "open",
+                        "conversation_count": 0,
+                    }
+                projects_map[pname]["conversation_count"] += 1
+
+    # Personal context dedup + cap
+    _seen_lower: dict = {}
+    for _p in personal_list:
+        _key = _p.lower()
+        if _key not in _seen_lower:
+            _seen_lower[_key] = _p
+    _unique_personal = list(_seen_lower.values())
+
+    _deduped_personal: list = []
+    for _p in _unique_personal:
+        _dominated = any(
+            _p != _other and _p.lower() in _other.lower()
+            for _other in _unique_personal
+        )
+        if not _dominated:
+            _deduped_personal.append(_p)
+
+    _PRIORITY_TERMS = frozenset({
+        "philadelphia", "metro", "area", "years old", "age",
+        "health", "medical", "condition", "email", "@",
+        "stage", "life", "city", "county", "state",
+    })
+
+    def _personal_priority(item: str) -> int:
+        low = item.lower()
+        return sum(1 for t in _PRIORITY_TERMS if t in low)
+
+    _deduped_personal.sort(key=_personal_priority, reverse=True)
+    personal_list = _deduped_personal[:10]
+
+    _LEAKAGE_PHRASES = [
+        "domains the human", "they taught or led", "not asked",
+        "topics the human", "follow-up questions", "pattern recognition",
+        "topics where the human", "came for assistance", "not expertise",
+        "not necessarily interest", "just needed help", "none mentioned",
+        "none specified", "null", "none", "n/a"
+    ]
+
+    expertise_counter = Counter({
+        k: v for k, v in expertise_counter.items()
+        if not any(phrase in k.lower() for phrase in _LEAKAGE_PHRASES)
+        and len(k) < 60
+    })
+
+    top_expertise = [e for e, _ in expertise_counter.most_common(10)]
+    most_common_role = Counter(roles).most_common(1)[0][0] if roles else None
+    projects_list = sorted(projects_map.values(), key=lambda p: -p["conversation_count"])[:10]
+
+    detected_name = user_name.strip() if user_name and user_name.strip() else "User"
+    print(f"[bio] detected name: {detected_name}")
+
+    raw_creds_ordered = [c for c, _ in credentials_counter.most_common()]
+    deduped_creds: list = []
+    for cred in raw_creds_ordered:
+        dominated = any(
+            cred != other and cred.lower() in other.lower()
+            for other in raw_creds_ordered
+        )
+        if not dominated:
+            deduped_creds.append(cred)
+    credentials_list = deduped_creds[:15]
+
+    aggregated_profile = {
+        "conversation_count": len(extractions),
+        "tier_counts": tier_counts,
+        "name": detected_name,
+        "most_common_role": most_common_role,
+        "detected_name": detected_name,
+        "top_expertise": top_expertise,
+        "credentials": credentials_list,
+        "top_projects": [p["name"] for p in projects_list[:5]],
+        "sample_your_words": your_words_list[:10],
+        "sample_corrections": corrections_list[:10],
+    }
+
+    agg_json = json.dumps(aggregated_profile, indent=2)
+    user_prompt = _SYNTHESIS_PASS_V2.format(
+        n=len(extractions),
+        name=detected_name,
+        extractions_json=agg_json,
+    )
+
+    synthesis_system = f"{PRIME_PROMPT}\n\nYou are a helpful assistant. Write clean markdown."
+    raw = _call_ollama(user_prompt, model=model, system=synthesis_system)
+    print(f"[bio] raw response length: {len(raw) if raw else 0}")
+    if not raw:
+        print("Synthesis pass returned no response.")
+        return None
+
+    # New synthesis path — prompt returns markdown directly
+    raw_markdown = raw.strip()
+
+    # Write markdown directly to get_to_know_me.md
+    bio_path = os.path.join(output_dir, "get_to_know_me.md")
+    with open(bio_path, "w", encoding="utf-8") as f:
+        f.write(raw_markdown)
+    print(f"Wrote biography to {bio_path}")
+
+    return {"bio_path": bio_path, "markdown": raw_markdown}
 
 
 def summarize_all(
@@ -287,18 +715,6 @@ def summarize_all(
     progress_callback=None,
     summary_style: str = "concise",
 ) -> list:
-    """
-    Summarize a list of conversations using local Ollama.
-
-    Args:
-        conversations: List of normalized conversation dicts
-        model: Ollama model name
-        progress_callback: Optional function(current, total) for progress updates
-        summary_style: "concise" (4-6 sentences) or "detailed" (8-20 bullets)
-
-    Returns:
-        List of summary dicts (failed summaries are excluded)
-    """
     summaries = []
     total = len(conversations)
 
@@ -322,11 +738,6 @@ def summarize_all_gen(
     model: str = DEFAULT_MODEL,
     summary_style: str = "concise",
 ):
-    """
-    Generator version of summarize_all.
-    Yields (current, total, title, summary_or_None) after each conversation,
-    allowing callers to stream progress updates in real time.
-    """
     total = len(conversations)
     for i, convo in enumerate(conversations):
         title = convo.get("title", "Untitled")
@@ -335,7 +746,6 @@ def summarize_all_gen(
 
 
 def check_ollama_running() -> bool:
-    """Check if Ollama is running and accessible on localhost."""
     try:
         req = urllib.request.Request(
             "http://localhost:11434/api/tags",

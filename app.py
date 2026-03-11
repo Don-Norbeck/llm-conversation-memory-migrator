@@ -4,7 +4,9 @@ Main entry point for llm-conversation-memory-migrator.
 Launches a local Gradio UI — no internet connection required.
 """
 
+import json
 import os
+import random
 import tempfile
 import time
 
@@ -20,8 +22,8 @@ from pathlib import Path
 from datetime import datetime
 
 from adapters.chatgpt import load_from_zip
-from core.summarizer import summarize_all, summarize_all_gen, check_ollama_running
-from core.classifier import classify_summaries, get_bucket_stats, merge_buckets, rename_bucket, get_all_bucket_names
+from core.summarizer import summarize_all, summarize_all_gen, check_ollama_running, synthesize_biography
+from core.classifier import classify_summaries, get_bucket_stats, get_all_bucket_names
 from core.exporter import export_all
 from core import config
 
@@ -33,6 +35,7 @@ state = {
     "grouped": {},
     "export_dir": None,
     "analysis_complete": False,
+    "ollama_model": None,
     # Conversation browser state
     "conv_table": {},    # id -> {id, title, date_str, date_dt, word_count, selected}
     "visible_ids": [],   # ordered list of IDs currently shown (after sort/filter)
@@ -261,11 +264,28 @@ def handle_table_change(df_data):
 
 # ── Step 2: Analyze ───────────────────────────────────────────────────────────
 
-def handle_analyze(progress=gr.Progress()):
+def _progress_html(text: str, current: int = 0, total: int = 0) -> str:
+    """Render a two-line status: text on line 1, progress bar + % on line 2."""
+    if total > 0:
+        pct = int(current / total * 100)
+        bar = (
+            f'<div style="display:flex;align-items:center;gap:8px;margin-top:6px">'
+            f'<div style="flex:1;background:#e0e0e0;border-radius:4px;height:10px">'
+            f'<div style="width:{pct}%;background:#4a90d9;border-radius:4px;height:10px;transition:width 0.2s"></div>'
+            f'</div>'
+            f'<span style="font-size:0.85em;min-width:38px;text-align:right;color:#555">{pct}%</span>'
+            f'</div>'
+        )
+    else:
+        bar = ""
+    return f'<div style="font-family:sans-serif;padding:4px 0">{text}{bar}</div>'
+
+
+def handle_analyze():
     def _yields(status, output, choices=None):
         """Helper: yield a consistent 4-tuple for all outputs."""
         update = gr.update(choices=choices, value=None) if choices is not None else gr.update()
-        yield status, output, update, update
+        yield status, output, update, gr.update()
 
     if not state["conversations"]:
         yield from _yields(
@@ -307,10 +327,17 @@ def handle_analyze(progress=gr.Progress()):
         if 0 < len(selected) < len(conversations):
             conversations = selected
 
-    # Apply test mode slice
+    # Apply test mode random sample
     if config.get("test_mode", False):
-        n = int(config.get("test_mode_n", 10))
-        conversations = conversations[:n]
+        n = int(config.get("test_mode_n", 20))
+        total_available = len(conversations)
+        if total_available <= n:
+            print(f"Test mode: only {total_available} conversations available, using all.")
+        else:
+            conversations = random.sample(conversations, n)
+            print(f"Test mode: randomly selected {n} of {total_available} conversations:")
+            for c in conversations:
+                print(f"  - {c.get('title', 'Untitled')}")
 
     ollama_cfg = config.get_ollama_config()
     total = len(conversations)
@@ -321,7 +348,16 @@ def handle_analyze(progress=gr.Progress()):
         s = int(time.time() - start_time)
         return f"{s // 60}:{s % 60:02d}"
 
+    # Show model-loading message immediately before first Ollama call
+    yield (
+        _progress_html("⏳ Loading model into memory — first summary may take 20–30 seconds…"),
+        "",
+        gr.update(),
+        gr.update(),
+    )
+
     summary_style = config.get("summary_style", "concise")
+    state["ollama_model"] = ollama_cfg["model"]
     for current, total, title, summary in summarize_all_gen(
         conversations,
         model=ollama_cfg["model"],
@@ -329,9 +365,8 @@ def handle_analyze(progress=gr.Progress()):
     ):
         if summary:
             summaries.append(summary)
-        progress(current / total)
-        status = f"⏳ Summarizing {current} of {total}: {title} — elapsed: {_elapsed_str()}"
-        yield status, "", gr.update(), gr.update()
+        status_text = f"⏳ Summarizing {current} of {total}: {title} — elapsed: {_elapsed_str()}"
+        yield _progress_html(status_text, current, total), "", gr.update(), gr.update()
 
     state["summaries"] = summaries
     grouped = classify_summaries(summaries)
@@ -341,7 +376,28 @@ def handle_analyze(progress=gr.Progress()):
     stats = get_bucket_stats(grouped)
     bucket_names = get_all_bucket_names(grouped)
 
+    # Yield synthesis-in-progress status before the (slow) LLM synthesis call
+    yield (
+        _progress_html(f"⏳ Synthesizing biography profile — elapsed: {_elapsed_str()}"),
+        "",
+        gr.update(choices=bucket_names, value=None),
+        gr.update(),
+    )
+
+    model = state.get("ollama_model") or config.get_ollama_config()["model"]
+    out_dir = config.get_output_dir()
+    print(f"[path] synthesize_biography writing to: {out_dir / 'get_to_know_me.md'}")
+    user_name = config.get_user_name()
+    print(f"[app] user_name from config: '{user_name}'")
+    result = synthesize_biography(state["summaries"], out_dir, model=model, user_name=user_name)
+    state["export_dir"] = str(out_dir)
+
     lines = [f"✅ Analysis complete — **{len(summaries)}/{total} summarized in {_elapsed_str()}**\n"]
+    if result is None:
+        lines.append(
+            "⚠️ Biography synthesis failed — try running Export to retry, "
+            "or switch to a larger model in Settings.\n"
+        )
     lines.append("### Detected Topics:\n")
     for s in stats:
         count = s['count']
@@ -352,33 +408,31 @@ def handle_analyze(progress=gr.Progress()):
         "",
         "\n".join(lines),
         gr.update(choices=bucket_names, value=None),
-        gr.update(choices=bucket_names, value=None),
+        _read_biography(),
     )
 
 
 # ── Step 3: Review ────────────────────────────────────────────────────────────
 
-def handle_rename(old_name: str, new_name: str) -> tuple:
-    if not old_name or not new_name:
-        return "❌ Please enter both current and new bucket names.", gr.update(), gr.update()
-    if old_name == new_name:
-        return "❌ Names are the same.", gr.update(), gr.update()
 
-    state["grouped"] = rename_bucket(state["grouped"], old_name, new_name)
-    bucket_names = get_all_bucket_names(state["grouped"])
-    return (
-        f"✅ Renamed **{old_name}** to **{new_name}**.",
-        gr.update(choices=bucket_names, value=None),
-        gr.update(choices=bucket_names, value=None),
+def _tier_badge(tier: str) -> str:
+    colours = {"signal": "#1a7f4b", "noise": "#888", "review": "#b45309"}
+    bg = colours.get(tier, "#555")
+    return f'<span style="background:{bg};color:#fff;padding:2px 8px;border-radius:10px;font-size:0.8em;font-weight:600">{tier or "?"}</span>'
+
+
+def _pill_list(items: list) -> str:
+    if not items:
+        return ""
+    pills = "".join(
+        f'<span style="background:#1a1a2e;border:1px solid rgba(255,107,26,0.2);color:#e6edf3;padding:1px 7px;border-radius:10px;font-size:0.82em;margin:2px 2px 2px 0;display:inline-block">{i}</span>'
+        for i in items
     )
+    return pills
 
 
-def handle_refresh() -> tuple:
-    bucket_names = get_all_bucket_names(state["grouped"])
-    return (
-        gr.update(choices=bucket_names, value=None),
-        gr.update(choices=bucket_names, value=None),
-    )
+def _section(label: str, html_body: str) -> str:
+    return f'<div style="margin-top:8px"><span style="font-weight:600;color:#ff6b1a">{label}</span> <span style="color:#e6edf3">{html_body}</span></div>'
 
 
 def handle_view_summaries(bucket_name: str) -> str:
@@ -386,37 +440,136 @@ def handle_view_summaries(bucket_name: str) -> str:
         return ""
     convos = state["grouped"].get(bucket_name, [])
     if not convos:
-        return f"*No conversations in **{bucket_name}**.*"
+        return f"<em>No conversations in <strong>{bucket_name}</strong>.</em>"
+
     parts = []
     for c in convos:
         title = c.get("title", "Untitled")
         date = c.get("created", "")
-        summary = c.get("summary", "*(no summary)*")
-        parts.append(f"### {title}\n*{date}*\n\n{summary}")
-    return "\n\n---\n\n".join(parts)
+        tier = c.get("tier", "")
+        topic = (c.get("what") or {}).get("topic", "")
+
+        who = c.get("who") or {}
+        if not isinstance(who, dict):
+            who = {}
+        what = c.get("what") or {}
+        if not isinstance(what, dict):
+            what = {}
+        how = c.get("how") or {}
+        if not isinstance(how, dict):
+            how = {}
+
+        rows = []
+
+        # ── WHO ──────────────────────────────────────────────────────────────
+        who_parts = []
+        if who.get("role"):
+            who_parts.append(f"<em>Role:</em> {who['role']}")
+        if who.get("expertise"):
+            who_parts.append(f"<em>Expertise:</em> {_pill_list(who['expertise'])}")
+        if who.get("credentials"):
+            who_parts.append(f"<em>Credentials:</em> {_pill_list(who['credentials'])}")
+        if who_parts:
+            rows.append(_section("WHO", " &nbsp;·&nbsp; ".join(who_parts)))
+
+        # ── WHAT ─────────────────────────────────────────────────────────────
+        what_parts = []
+        if what.get("outcome"):
+            what_parts.append(what["outcome"])
+        if what.get("depth"):
+            what_parts.append(f"<em>Depth:</em> {what['depth']}")
+        if what.get("project"):
+            what_parts.append(f"<em>Project:</em> {what['project']}")
+        if what.get("open_thread"):
+            what_parts.append(f"<em>Open:</em> {what['open_thread']}")
+        if what_parts:
+            rows.append(_section("WHAT", " &nbsp;·&nbsp; ".join(what_parts)))
+
+        # ── HOW ──────────────────────────────────────────────────────────────
+        how_parts = []
+        if how.get("initial_prompt"):
+            how_parts.append(f"<em>Opening ask:</em> {how['initial_prompt']}")
+        if how.get("corrections"):
+            how_parts.append(f"<em>Corrections:</em> {_pill_list(how['corrections'])}")
+        if how.get("your_words"):
+            quoted = " ".join(f'"{w}"' for w in how["your_words"])
+            how_parts.append(f"<em>Your words:</em> {quoted}")
+        if how_parts:
+            rows.append(_section("HOW", " &nbsp;·&nbsp; ".join(how_parts)))
+
+        # ── Raw JSON toggle ───────────────────────────────────────────────────
+        raw_json = json.dumps(c, indent=2, ensure_ascii=False)
+        raw_toggle = (
+            f'<details style="margin-top:10px">'
+            f'<summary style="cursor:pointer;color:#8b949e;font-size:0.82em">Raw JSON</summary>'
+            f'<pre style="background:#0d1117;border:1px solid rgba(255,107,26,0.2);color:#8b949e;'
+            f'padding:10px;border-radius:4px;font-family:monospace;'
+            f'font-size:0.78em;overflow-x:auto;white-space:pre-wrap">{raw_json}</pre>'
+            f'</details>'
+        )
+
+        body = "".join(rows) + raw_toggle
+        card = (
+            f'<div style="background:#161b22;border:1px solid rgba(255,107,26,0.2);border-radius:8px;padding:14px 16px;margin-bottom:14px">'
+            f'<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:4px">'
+            f'<span style="font-size:1.05em;font-weight:700;color:#e6edf3">{title}</span>'
+            f'{_tier_badge(tier)}'
+            f'<span style="color:#8b949e;font-size:0.82em">{topic}</span>'
+            f'</div>'
+            f'<div style="color:#8b949e;font-size:0.82em;margin-bottom:8px">{date}</div>'
+            f'{body}'
+            f'</div>'
+        )
+        parts.append(card)
+
+    return "".join(parts)
 
 
 # ── Step 4: Export ────────────────────────────────────────────────────────────
 
-def handle_export(output_path: str) -> str:
+def _read_biography() -> str:
+    """Read get_to_know_me.md from the configured output directory."""
+    bio_path = config.get_output_dir() / "get_to_know_me.md"
+    print(f"[path] _read_biography reading from: {bio_path}")
+    if not bio_path.exists():
+        return "_Run Export to generate your biography profile._"
+    try:
+        return bio_path.read_text(encoding="utf-8")
+    except OSError:
+        return "_Run Export to generate your biography profile._"
+
+
+def handle_export(output_path: str):
+    _no_change = gr.update()
+
     if not state["grouped"] or not state["summaries"]:
-        return "❌ No data to export. Please analyze your conversations first."
+        return "❌ No data to export. Please analyze your conversations first.", _no_change
 
     if not output_path.strip():
         output_path = str(config.get_output_dir())
 
     # Windows path length guard
     if len(output_path) > 200:
-        return "❌ Output path is too long. Please choose a shorter folder path."
+        return "❌ Output path is too long. Please choose a shorter folder path.", _no_change
 
     try:
         out_dir = Path(output_path)
         user_name = config.get_user_name()
         exported = export_all(state["grouped"], out_dir, user_name)
 
+        # Copy get_to_know_me.md to the user-specified export dir if it differs
+        src_bio = config.get_output_dir() / "get_to_know_me.md"
+        dst_bio = out_dir / "get_to_know_me.md"
+        if src_bio.exists() and src_bio.resolve() != dst_bio.resolve():
+            try:
+                dst_bio.write_text(src_bio.read_text(encoding="utf-8"), encoding="utf-8")
+            except OSError as e:
+                print(f"[warn] Could not copy get_to_know_me.md to export dir: {e}")
+
         lines = [f"✅ Export complete — **{len(exported)} files written**\n"]
         lines.append(f"📁 Output folder: `{out_dir}`\n")
         lines.append("### Files created:\n")
+        lines.append(f"- 📖 `get_to_know_me.md` ← Biography profile synthesized from all conversations")
         for bucket, path in exported.items():
             if bucket == "__master__":
                 lines.append(f"- 📋 `{path.name}` ← Upload this to your new LLM first")
@@ -430,14 +583,66 @@ def handle_export(output_path: str) -> str:
         lines.append("3. Start chatting — your context is restored!")
 
         config.set_value("last_export_path", str(out_dir))
-        return "\n".join(lines)
+        state["export_dir"] = str(out_dir)
+        return "\n".join(lines), _read_biography()
 
     except PermissionError:
-        return "❌ Permission denied. Please choose a folder you have write access to."
+        return "❌ Permission denied. Please choose a folder you have write access to.", _no_change
     except OSError as e:
-        return f"❌ Could not write to folder: {e}"
+        return f"❌ Could not write to folder: {e}", _no_change
     except Exception as e:
-        return f"❌ Export failed: {e}"
+        return f"❌ Export failed: {e}", _no_change
+
+
+# ── Dark theme CSS ────────────────────────────────────────────────────────────
+
+DARK_CSS = """
+/* Base */
+body, .gradio-container, .main, footer { background:#080c10 !important; color:#e6edf3 !important; }
+
+/* Tabs */
+.tab-nav button { background:#161b22 !important; color:#8b949e !important; border-color:rgba(255,107,26,0.2) !important; }
+.tab-nav button.selected { background:#0d1117 !important; color:#e6edf3 !important; border-bottom-color:#ff6b1a !important; }
+
+/* Inputs, textboxes, dropdowns */
+input, textarea, select,
+.gr-input, .gr-textbox textarea, .gr-textbox input,
+.block.svelte-90oupt input, .block.svelte-90oupt textarea {
+    background:#1a1a2e !important;
+    color:#e6edf3 !important;
+    border-color:rgba(255,107,26,0.2) !important;
+}
+input::placeholder, textarea::placeholder { color:#8b949e !important; }
+
+/* Labels */
+label span, .gr-label, .block label > span { color:#e6edf3 !important; }
+
+/* Markdown prose */
+.prose, .prose p, .prose li, .prose h1, .prose h2, .prose h3,
+.gr-markdown, .gr-markdown p { color:#e6edf3 !important; }
+
+/* Panels / blocks */
+.gr-panel, .gr-box, .block { background:#0d1117 !important; border-color:rgba(255,107,26,0.2) !important; }
+
+/* Secondary buttons */
+.gr-button-secondary, button.secondary {
+    background:#161b22 !important;
+    color:#e6edf3 !important;
+    border-color:rgba(255,107,26,0.2) !important;
+}
+
+/* Dropdown list */
+.gr-dropdown ul, .dropdown-arrow, ul.options { background:#161b22 !important; }
+.gr-dropdown ul li:hover { background:#1a1a2e !important; }
+
+/* Dataframe */
+.gr-dataframe table { background:#0d1117 !important; color:#e6edf3 !important; }
+.gr-dataframe th { background:#161b22 !important; color:#ff6b1a !important; }
+.gr-dataframe td { border-color:rgba(255,107,26,0.1) !important; }
+
+/* HTML output container */
+.gr-html { background:#0d1117 !important; color:#e6edf3 !important; }
+"""
 
 
 # ── UI Layout ─────────────────────────────────────────────────────────────────
@@ -447,6 +652,7 @@ def build_ui():
 
     with gr.Blocks(
         title="LLM Conversation Memory Migrator",
+        css=DARK_CSS,
     ) as app:
 
         # ── Header ──────────────────────────────────────────────────────────
@@ -589,56 +795,28 @@ def build_ui():
                 "🧠 Analyze with Local AI",
                 variant="primary"
             )
-            analyze_status = gr.Markdown(value="")
+            analyze_status = gr.HTML(value="")
             analyze_output = gr.Markdown()
 
         # ── Step 3: Review ───────────────────────────────────────────────────
         with gr.Tab("③ Review"):
-            gr.Markdown("""
-            ### Review & Organize Topics
+            gr.Markdown("### Review Extractions")
 
-            Rename or merge topic buckets before exporting.
-            """)
-
-            gr.Markdown("**Rename Bucket**")
-            with gr.Row():
-                rename_old = gr.Dropdown(
-                    label="Current name",
-                    choices=[],
-                    interactive=True
-                )
-                rename_new = gr.Textbox(label="New name")
-            rename_btn = gr.Button("✏️ Rename")
-            rename_output = gr.Markdown()
-
-            refresh_btn = gr.Button("🔄 Refresh Bucket List")
-
-            gr.Markdown("---")
-            gr.Markdown("**View Summaries**")
             summary_bucket_dd = gr.Dropdown(
-                label="View summaries for bucket:",
+                label="Bucket:",
                 choices=[],
                 interactive=True,
             )
-            summary_viewer = gr.Markdown(value="")
+            summary_viewer = gr.HTML(value="")
+
+            gr.Markdown("---\n### 📋 Biography Preview")
+            biography_preview = gr.Markdown(value=_read_biography())
 
             # Wire analyze button now that dropdowns are defined
             analyze_btn.click(
                 fn=handle_analyze,
                 inputs=[],
-                outputs=[analyze_status, analyze_output, rename_old, summary_bucket_dd]
-            )
-
-            refresh_btn.click(
-                fn=handle_refresh,
-                inputs=[],
-                outputs=[rename_old, summary_bucket_dd]
-            )
-
-            rename_btn.click(
-                fn=handle_rename,
-                inputs=[rename_old, rename_new],
-                outputs=[rename_output, rename_old, summary_bucket_dd]
+                outputs=[analyze_status, analyze_output, summary_bucket_dd, biography_preview]
             )
 
             summary_bucket_dd.change(
@@ -667,7 +845,7 @@ def build_ui():
             export_btn.click(
                 fn=handle_export,
                 inputs=[output_dir_input],
-                outputs=[export_output]
+                outputs=[export_output, biography_preview]
             )
 
         # ── Settings ─────────────────────────────────────────────────────────
@@ -706,12 +884,12 @@ def build_ui():
 
             gr.Markdown("---\n**Test Mode**")
             test_mode_input = gr.Checkbox(
-                label="Test Mode — analyze first N conversations only",
+                label="Test Mode — analyze a random sample of N conversations",
                 value=cfg.get("test_mode", False),
             )
             test_mode_n_input = gr.Number(
                 label="N",
-                value=cfg.get("test_mode_n", 10),
+                value=cfg.get("test_mode_n", 20),
                 precision=0,
                 minimum=1,
             )
@@ -725,7 +903,7 @@ def build_ui():
                 config.set_value("ollama_url", url)
                 config.set_value("summary_style", "detailed" if "Detailed" in style else "concise")
                 config.set_value("test_mode", bool(test_mode))
-                config.set_value("test_mode_n", int(test_mode_n) if test_mode_n else 10)
+                config.set_value("test_mode_n", int(test_mode_n) if test_mode_n else 20)
                 return "✅ Settings saved."
 
             save_settings_btn.click(

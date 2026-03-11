@@ -10,6 +10,22 @@ from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
 
+def _count_items(items: list) -> Dict[str, int]:
+    """Return a dict mapping each item to its occurrence count."""
+    counts: Dict[str, int] = {}
+    for item in items:
+        if item:
+            counts[item] = counts.get(item, 0) + 1
+    return counts
+
+
+def _safe_join(value, sep: str = ", ") -> str:
+    """Join a value as strings. Coerces non-list to empty; coerces items to str."""
+    if not isinstance(value, list):
+        return ""
+    return sep.join(str(x) for x in value if x is not None)
+
+
 def sanitize_filename(name: str) -> str:
     """Convert a bucket name to a safe filename."""
     clean = name.replace("&", "and")
@@ -24,41 +40,59 @@ def format_summary_as_markdown(summary: Dict[str, Any]) -> str:
     title = summary.get("title", "Untitled")
     created = summary.get("created", "unknown")
     updated = summary.get("updated", "unknown")
+    tier = summary.get("tier", "")
 
+    tier_str = f" | tier: {tier}" if tier else ""
     lines.append(f"### {title}")
-    lines.append(f"*Created: {created} | Updated: {updated}*")
+    lines.append(f"*Created: {created} | Updated: {updated}{tier_str}*")
     lines.append("")
 
-    if summary.get("summary"):
-        lines.append(summary["summary"])
+    # WHAT
+    what = summary.get("what") or {}
+    outcome = what.get("outcome")
+    if outcome:
+        lines.append(outcome)
         lines.append("")
 
-    decisions = summary.get("key_decisions", [])
-    if decisions and isinstance(decisions, list):
-        lines.append("**Key Decisions:**")
-        for d in decisions:
-            lines.append(f"- {d}")
+    if what.get("depth"):
+        lines.append(f"**Depth:** {what['depth']}")
         lines.append("")
 
-    artifacts = summary.get("artifacts", [])
-    if artifacts and isinstance(artifacts, list):
-        lines.append("**Artifacts Created:**")
-        for a in artifacts:
-            lines.append(f"- {a}")
+    open_thread = what.get("open_thread")
+    if open_thread:
+        lines.append(f"**Open thread:** {open_thread}")
         lines.append("")
 
-    threads = summary.get("open_threads", [])
-    if threads and isinstance(threads, list):
-        lines.append("**Open Threads:**")
-        for t in threads:
-            lines.append(f"- {t}")
+    # WHO
+    who = summary.get("who") or {}
+    who_lines = []
+    if who.get("role"):
+        who_lines.append(f"- **Role:** {who['role']}")
+    if who.get("expertise"):
+        who_lines.append(f"- **Expertise:** {_safe_join(who['expertise'])}")
+    if who.get("credentials"):
+        who_lines.append(f"- **Credentials:** {_safe_join(who['credentials'])}")
+    if who.get("personal"):
+        who_lines.append(f"- **Personal:** {_safe_join(who['personal'])}")
+    if who_lines:
+        lines.append("**WHO:**")
+        lines.extend(who_lines)
         lines.append("")
 
-    prefs = summary.get("preferences", [])
-    if prefs and isinstance(prefs, list):
-        lines.append("**Preferences & Style Notes:**")
-        for p in prefs:
-            lines.append(f"- {p}")
+    # HOW
+    how = summary.get("how") or {}
+    how_lines = []
+    if how.get("initial_prompt"):
+        how_lines.append(f"- **Opening ask:** {how['initial_prompt']}")
+    if how.get("corrections"):
+        how_lines.append(f"- **Corrections:** {_safe_join(how['corrections'])}")
+    if how.get("your_words"):
+        words = how["your_words"] if isinstance(how["your_words"], list) else []
+        quoted = " ".join(f'"{str(w)}"' for w in words if w is not None)
+        how_lines.append(f"- **Your words:** {quoted}")
+    if how_lines:
+        lines.append("**HOW:**")
+        lines.extend(how_lines)
         lines.append("")
 
     lines.append("---")
@@ -98,33 +132,41 @@ def export_bucket(
     # Overview — collect all topics
     all_topics = []
     for s in summaries:
-        topics = s.get("topics", [])
-        if isinstance(topics, list):
-            all_topics.extend(topics)
+        topic = (s.get("what") or {}).get("topic")
+        if topic:
+            all_topics.append(topic)
     unique_topics = sorted(set(all_topics))
     if unique_topics:
         lines.append("## Topic Overview")
         lines.append(", ".join(unique_topics))
         lines.append("")
 
-    # All preferences across bucket
-    all_prefs = []
+    # Expertise signals
+    all_expertise = []
     for s in summaries:
-        prefs = s.get("preferences", [])
-        if isinstance(prefs, list):
-            all_prefs.extend(prefs)
-    if all_prefs:
-        lines.append("## Accumulated Preferences & Style Notes")
-        for p in set(all_prefs):
-            lines.append(f"- {p}")
+        all_expertise.extend((s.get("who") or {}).get("expertise") or [])
+    if all_expertise:
+        lines.append("## Expertise Signals")
+        for e in sorted(set(all_expertise)):
+            lines.append(f"- {e}")
         lines.append("")
 
-    # All open threads
+    # Correction patterns
+    all_corrections = []
+    for s in summaries:
+        all_corrections.extend((s.get("how") or {}).get("corrections") or [])
+    if all_corrections:
+        lines.append("## Correction Patterns")
+        for c in sorted(set(all_corrections)):
+            lines.append(f"- {c}")
+        lines.append("")
+
+    # Open threads
     all_threads = []
     for s in summaries:
-        threads = s.get("open_threads", [])
-        if isinstance(threads, list):
-            all_threads.extend(threads)
+        thread = (s.get("what") or {}).get("open_thread")
+        if thread:
+            all_threads.append(thread)
     if all_threads:
         lines.append("## Open Threads & Next Steps")
         for t in all_threads:
@@ -136,7 +178,7 @@ def export_bucket(
     lines.append("## Conversation Summaries")
     lines.append("")
 
-    sorted_summaries = sorted(summaries, key=lambda x: x.get("created", ""))
+    sorted_summaries = sorted(summaries, key=lambda x: str(x.get("created") or ""))
     for summary in sorted_summaries:
         lines.append(format_summary_as_markdown(summary))
 
@@ -153,7 +195,7 @@ def export_master_context(
     Generate a master context document summarizing all buckets.
     Returns the path to the written file.
     """
-    output_path = output_dir / "full_context.md"
+    output_path = output_dir / "get_to_know_me_full.md"
     lines = []
 
     name_str = f" — {user_name}" if user_name else ""
@@ -183,33 +225,44 @@ def export_master_context(
         lines.append(f"*{len(summaries)} conversations*")
         lines.append("")
 
-        all_decisions = []
+        # Outcomes — up to 10
+        all_outcomes = []
         for s in summaries:
-            decisions = s.get("key_decisions", [])
-            if isinstance(decisions, list):
-                all_decisions.extend(decisions)
-        if all_decisions:
-            lines.append("**Key Decisions & Conclusions:**")
-            for d in all_decisions[:10]:
-                lines.append(f"- {d}")
+            outcome = (s.get("what") or {}).get("outcome")
+            if outcome:
+                all_outcomes.append(outcome)
+        if all_outcomes:
+            lines.append("**Outcomes & Intent:**")
+            for o in all_outcomes[:10]:
+                lines.append(f"- {o}")
             lines.append("")
 
-        all_prefs = []
+        # Expertise signals
+        all_expertise = []
         for s in summaries:
-            prefs = s.get("preferences", [])
-            if isinstance(prefs, list):
-                all_prefs.extend(prefs)
-        if all_prefs:
-            lines.append("**Preferences & Style:**")
-            for p in list(set(all_prefs))[:5]:
-                lines.append(f"- {p}")
+            all_expertise.extend((s.get("who") or {}).get("expertise") or [])
+        if all_expertise:
+            lines.append("**Expertise:**")
+            for e in sorted(set(all_expertise)):
+                lines.append(f"- {e}")
             lines.append("")
 
+        # Correction patterns — up to 5 unique
+        all_corrections = []
+        for s in summaries:
+            all_corrections.extend((s.get("how") or {}).get("corrections") or [])
+        if all_corrections:
+            lines.append("**Correction Patterns:**")
+            for c in list(set(all_corrections))[:5]:
+                lines.append(f"- {c}")
+            lines.append("")
+
+        # Open threads — up to 5
         all_threads = []
         for s in summaries:
-            threads = s.get("open_threads", [])
-            if isinstance(threads, list):
-                all_threads.extend(threads)
+            thread = (s.get("what") or {}).get("open_thread")
+            if thread:
+                all_threads.append(thread)
         if all_threads:
             lines.append("**Open Threads:**")
             for t in all_threads[:5]:
@@ -234,15 +287,7 @@ def export_all(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     exported = {}
-
-    for bucket, summaries in grouped.items():
-        if not summaries:
-            continue
-        if not isinstance(summaries, list):
-            continue
-        path = export_bucket(bucket, summaries, output_dir)
-        exported[bucket] = path
-        print(f"  Exported: {path.name} ({len(summaries)} conversations)")
+    # Bucket *_context.md files are disabled; bucket field is retained on extractions
 
     master_path = export_master_context(grouped, output_dir, user_name)
     exported["__master__"] = master_path
