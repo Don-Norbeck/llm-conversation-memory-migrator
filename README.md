@@ -1,491 +1,246 @@
-# llm-conversation-memory-migrator
+# OwnYourContext
+
+**Your AI Memory. Your Machine. Your Call.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-orange.svg)](https://opensource.org/licenses/MIT)
+[![Version](https://img.shields.io/badge/version-v0.2-orange.svg)](https://github.com/Don-Norbeck/llm-conversation-memory-migrator/releases/tag/v0.2)
+[![Local Only](https://img.shields.io/badge/processing-100%25%20local-teal.svg)](#privacy)
+
+---
 
 ## The Problem
 
-When you switch AI services you lose months of accumulated context.
-Every new conversation starts from zero. That's frustrating and
-inefficient.
+When you switch AI services you lose months of accumulated context. Every new conversation starts from zero.
 
-The obvious fix — just upload your conversation history — doesn't
-work. A typical ChatGPT export is 400-500MB of JSON. That's
-approximately 50 million tokens. Claude's context window is 200K
-tokens. You can't upload 50 million tokens into a 200K window.
+The obvious fix — just upload your conversation history — doesn't work. A typical ChatGPT export is 400–500MB of JSON. That's approximately 50 million tokens. Claude's context window is 200K tokens. You can't upload 50 million tokens into a 200K window.
+
+When you switch, you don't just lose your chat history. You lose:
+
+- Months or years of accumulated context about who you are
+- Project decisions, code, and artifacts you built together
+- Your communication style and preferences the model learned
+- Active work threads that are mid-stream
+
+**OwnYourContext fixes that — entirely on your machine.**
+
+---
 
 ## The Solution
 
-LLM Conversation Memory Migrator solves this by compressing your
-conversation history into a context window that actually fits.
+OwnYourContext compresses your conversation history into a context window that actually fits, then extracts the signals that make a new LLM feel like it already knows you.
 
 1. Export your conversation history from ChatGPT
-2. Run the migrator locally — Ollama summarizes every conversation
-   on your machine
-3. 489 conversations become 10 clean markdown files (~200K tokens)
+2. Run the migrator locally — a local AI model summarizes every conversation on your machine
+3. 489 conversations become clean markdown files (~200K tokens)
 4. Upload to Claude Projects — your context is restored
 
-Tested on 489 real conversations. 98% summarization success rate.
-5/5 factual recall on validation tests.
+Tested on 489 real conversations. 98% summarization success rate. 5/5 factual recall on validation tests.
 
-Your data never leaves your machine.
-
----
-
-
-
-\## Why This Exists
-
-
-
-When you switch LLM services, you don't just lose your chat history. You lose:
-
-
-
-\- Months or years of accumulated context about who you are
-
-\- Project decisions, code, and artifacts you built together
-
-\- Your communication style and preferences the model learned
-
-\- Active work threads that are mid-stream
-
-
-
-This tool fixes that. It reads your export, understands what matters, and produces clean context documents you can drop straight into your new LLM — so you pick up where you left off.
-
-
+**Your data never leaves your machine.**
 
 ---
 
+## What's New in v0.2
 
+- **Biography output** — `get_to_know_me.md` — a warm handoff document your new LLM can use from conversation one
+- **Browse tab** — review every conversation before it gets summarized
+- **Warm handoff context files** — structured markdown, ready for Claude Projects
+- **98% pipeline success** validated across 489 real conversations
 
-\## Privacy First. Always.
-
-
-
-This tool was built on a single non-negotiable principle: \*\*your conversations are yours\*\*.
-
-
-
-\- ✅ Runs 100% on your local machine
-
-\- ✅ No internet connection required
-
-\- ✅ No accounts, no sign-ups, no API keys required (optional for power users)
-
-\- ✅ No telemetry, no analytics, no logging to any server
-
-\- ✅ No data ever transmitted outside your machine
-
-\- ✅ Fully open source — verify every line yourself
-
-\- ❌ No cloud processing
-
-\- ❌ No shared infrastructure
-
-\- ❌ No exceptions
-
-
-
-Summarization is powered by \*\*Ollama + Llama 3.2\*\* running locally on your machine. If you prefer to use your own OpenAI or Anthropic API key for higher quality summaries, that option is available — but your data goes only to your own account, never to ours.
-
-
+[→ View v0.2 Release Notes](https://github.com/Don-Norbeck/llm-conversation-memory-migrator/releases/tag/v0.2)
 
 ---
 
+## Privacy First. Always.
 
+This tool was built on a single non-negotiable principle: **your conversations are yours**.
 
-\## Who This Is For
+- ✅ Runs 100% on your local machine
+- ✅ No internet connection required
+- ✅ No accounts, no sign-ups, no API keys required
+- ✅ No telemetry, no analytics, no logging to any server
+- ✅ No data ever transmitted outside your machine
+- ✅ Fully open source — verify every line yourself
+- ❌ No cloud processing
+- ❌ No shared infrastructure
+- ❌ No exceptions
 
-
-
-\- Someone switching from ChatGPT to Claude (or any LLM to any LLM)
-
-\- Anyone who has built up months of context with one AI and doesn't want to start over
-
-\- People who care about privacy and want full control of their data
-
-\- Power users who want clean, structured project context in their new LLM
-
-\- \*\*No technical experience required\*\*
-
-
+Summarization is powered by **Ollama + mistral-nemo:12b** running locally on your machine. If you prefer to use your own OpenAI or Anthropic API key for higher quality summaries, that option is available — but your data goes only to your own account, never to ours.
 
 ---
 
+## Who This Is For
 
+- Someone switching from ChatGPT to Claude (or any LLM to any LLM)
+- Anyone who has built up months of context with one AI and doesn't want to start over
+- People who care about privacy and want full control of their data
+- Power users who want clean, structured project context in their new LLM
 
-\## How It Works
-
-
-
-```
-
-1\. Export your chat history from your current LLM service
-
-2\. Open llm-conversation-memory-migrator
-
-3\. Drop in your export file
-
-4\. Click Analyze — local AI reads and summarizes your conversations
-
-5\. Review auto-detected topics, rename or merge as needed
-
-6\. Click Export — get clean context documents per topic
-
-7\. Upload to your new LLM service and pick up where you left off
-
-```
-
-
-
-Total time: \*\*15–30 minutes\*\* for most users.
-
-
+**No technical experience required.**
 
 ---
 
+## Quickstart
 
+### Step 1 — Install Ollama
 
-\## Supported Services
+Download and install Ollama from [ollama.com](https://ollama.com). It installs like any normal application.
 
-
-
-| Source | Status |
-
-|--------|--------|
-
-| ChatGPT | ✅ Supported (v1) |
-
-| Claude | 🔜 Coming in v2 |
-
-| Gemini | 🔜 Coming in v2 |
-
-| Microsoft Copilot | 🔜 Planned |
-
-
-
-| Target | Status |
-
-|--------|--------|
-
-| Claude Projects | ✅ Supported (v1) |
-
-| ChatGPT Memory | 🔜 Coming in v2 |
-
-| Gemini | 🔜 Planned |
-
-
-
----
-
-
-
-\## Quickstart
-
-
-
-\### Step 1 — Install Ollama
-
-
-
-Download and install Ollama from \[ollama.com](https://ollama.com). It installs like any normal application.
-
-
-
-Then open a terminal and run:
-
-
+Then open a terminal and pull the local model:
 
 ```bash
-
-ollama pull llama3.2
-
+ollama pull mistral-nemo
 ```
 
+This downloads the local AI model that powers summarization (~7GB, one time).
 
-
-This downloads the local AI model that powers summarization (~2GB, one time).
-
-
-
-\### Step 2 — Install the Migrator
-
-
+### Step 2 — Install OwnYourContext
 
 ```bash
-
-git clone https://github.com/\[your-handle]/llm-conversation-memory-migrator
-
+git clone https://github.com/Don-Norbeck/llm-conversation-memory-migrator
 cd llm-conversation-memory-migrator
-
 pip install -r requirements.txt
-
 python app.py
-
 ```
 
+A local webpage will open in your browser. No internet connection is used.
 
+### Step 3 — Export Your Chat History
 
-A local webpage will open in your browser. That's the app — no internet connection is used.
+**From ChatGPT:**
 
+1. Go to chatgpt.com → Settings → Data Controls
+2. Click **Export Data**
+3. Wait for the email from OpenAI with your download link
+4. Download the zip file
 
+### Step 4 — Run the Migration
 
-\### Step 3 — Export Your Chat History
+1. Open the app (`python app.py` if not already running)
+2. Click **Load Export** and select your zip file
+3. Click **Analyze** and wait (~5–15 minutes depending on history size)
+4. Browse conversations — review, select, or deselect before export
+5. Click **Export** to generate your context documents
 
+### Step 5 — Import to Claude
 
-
-\*\*From ChatGPT:\*\*
-
-1\. Go to chatgpt.com → Settings → Data Controls
-
-2\. Click \*\*Export Data\*\*
-
-3\. Wait for the email from OpenAI with your download link
-
-4\. Download the zip file
-
-
-
-\### Step 4 — Run the Migration
-
-
-
-1\. Open the app (if not already open: `python app.py`)
-
-2\. Click \*\*Upload Export\*\* and select your zip file
-
-3\. Click \*\*Analyze\*\* and wait (~5–15 minutes depending on history size)
-
-4\. Review the auto-detected topic buckets
-
-5\. Rename, merge, or split topics as needed
-
-6\. Click \*\*Export\*\* to generate your context documents
-
-
-
-\### Step 5 — Import to Claude
-
-
-
-1\. Go to \[claude.ai](https://claude.ai) → Projects → New Project
-
-2\. Name it after one of your topic buckets
-
-3\. Click \*\*Add Content\*\* → \*\*Upload Files\*\*
-
-4\. Select the exported markdown files for that topic
-
-5\. Repeat for each topic
-
-6\. Start chatting — Claude now has your full context
-
-
+1. Go to [claude.ai](https://claude.ai) → Projects → New Project
+2. Click **Add Content** → **Upload Files**
+3. Upload `get_to_know_me.md` first — this is your warm handoff document
+4. Add any topic context files for the domains you're working in
+5. Start chatting — Claude now has your full context
 
 ---
 
+## Output Files
 
+**`get_to_know_me.md`** — Your warm handoff document. Upload this first to any new LLM. Contains:
+- Who you are — name, role, background, credentials
+- What you work on — active projects, domains, key terms (signal-tier only)
+- How you work — communication style, format preferences, working patterns
+- Don't do this — explicit negative preferences from your correction history
+- Your words — 2–5 verbatim phrases that capture your voice and framing
 
-\## Output Format
-
-
-
-For each topic bucket the tool generates:
-
-
-
-\*\*`\[topic]\_context.md`\*\* — A structured summary containing:
-
-\- Topic overview and key themes
-
-\- Important decisions and conclusions reached
-
-\- Artifacts created (code, documents, frameworks)
-
-\- Open threads and unresolved questions
-
-\- Your preferences and communication style for this domain
-
-\- Chronological timeline of key milestones
-
-
-
-\*\*`master\_context.md`\*\* — A single document summarizing who you are, your projects, preferences, and accumulated context across all topics. Useful as a universal system prompt or project briefing.
-
-
+**`[topic]_context.md`** — One file per topic domain. Deeper detail for domain-specific work. Upload the relevant files when starting work in that area.
 
 ---
 
-
-
-\## System Requirements
-
-
+## System Requirements
 
 | Component | Minimum | Recommended |
-
 |-----------|---------|-------------|
-
 | OS | Windows 10, macOS 12, Ubuntu 20.04 | Windows 11, macOS 14 |
-
 | RAM | 8GB | 16GB+ |
-
-| Storage | 5GB free | 10GB free |
-
-| GPU | Not required | Any NVIDIA/AMD GPU speeds up processing |
-
+| Storage | 10GB free | 20GB free |
+| GPU | Not required | NVIDIA/AMD GPU speeds up processing |
 | Internet | Not required | Not required |
 
-
-
 ---
 
+## Supported Services
 
+| Source | Status |
+|--------|--------|
+| ChatGPT | ✅ Supported |
+| Claude | 🔜 v0.3 |
+| Gemini | 🔜 v0.3 |
+| Microsoft Copilot | 🔜 Planned |
 
-\## Power User Options
-
-
-
-If you want higher-quality summaries and have your own API key:
-
-
-
-```
-
-Settings → Summarization Backend → Choose:
-
-&nbsp; ● Local (Ollama) — default, fully private
-
-&nbsp; ○ OpenAI (your key) — faster, higher quality
-
-&nbsp; ○ Anthropic (your key) — fastest, highest quality
-
-```
-
-
-
-Your API key is stored locally in a config file on your machine. It is never transmitted anywhere except directly to your own API account.
-
-
+| Target | Status |
+|--------|--------|
+| Claude Projects | ✅ Supported |
+| ChatGPT Memory | 🔜 v0.3 |
+| Gemini | 🔜 Planned |
 
 ---
-
-
-
-\## Contributing
-
-
-
-This project welcomes contributions, especially:
-
-
-
-\- \*\*New source adapters\*\* — add support for exporting from other LLM services
-
-\- \*\*New target adapters\*\* — add support for importing to other LLM services
-
-\- \*\*Language translations\*\* — help make this accessible globally
-
-\- \*\*UX improvements\*\* — make it even simpler for non-technical users
-
-
-
-See \[docs/adding-adapters.md](docs/adding-adapters.md) for how to add a new LLM source or target.
-
-
-
----
-
-
-
----
-
-
-
-\## License
-
-
-
-MIT — free to use, modify, and distribute.
-
-
-
----
-
-
-
-\## About
-
-
-
-Built by \[Don Norbeck](https://darkaidefense.com) — because your accumulated context belongs to you, not to the platform you happened to use when you built it.
-
-
-
----
-
-
-
-\*If this tool helped you, consider starring the repo and sharing it with someone else making the switch.\*
-
-
 
 ## Roadmap
 
-**v0.1 — ChatGPT → Claude ✅ Shipped**
+### v0.1 — ChatGPT → Claude ✅ Shipped
 - [x] ChatGPT export parser
-- [x] Ollama-powered local summarization (Llama 3.2)
+- [x] Ollama-powered local summarization
 - [x] Auto topic classification into 10 buckets
 - [x] Interactive review UI (Gradio)
 - [x] Bucket merge and rename
 - [x] Claude-ready markdown export
-- [x] Full context document generation
-- [x] Temp file cleanup after parsing — no conversation data left on disk
+- [x] Temp file cleanup — no conversation data left on disk
 - [x] Tested on 489 real conversations — 98% success rate, 5/5 recall
 
-**v0.2 — Quality & Review (Sprint Plan)**
+### v0.2 — Quality & Biography ✅ Shipped — March 2026
+- [x] Browse tab — view, sort, and filter all conversations after upload
+- [x] Biography output — `get_to_know_me.md` warm handoff document
+- [x] Warm handoff context files — structured per-topic markdown
+- [x] WHO/WHAT/HOW signal extraction per conversation
+- [x] Name recognition — user name injected correctly throughout biography
+- [x] Cyberpunk UI — OwnYourContext brand applied to Gradio app
+- [x] 98% pipeline success validated on full 489-conversation dataset
 
-Sprint 1 — Browse Tab
-- [ ] Display all conversations in a sortable list after upload
-- [ ] Columns: checkbox, title, date, word count
-- [ ] Sort by date, size, or title
-- [ ] Select all / deselect all
-- [ ] Date range filter
-
-Sprint 2 — Summary Quality and Export Fixes
-- [ ] Expand summaries to 4-6 sentences or 8-20 bullet points (user choice in Settings)
-- [ ] Capture specific names, decisions, tools, and file names in summaries
-- [ ] Target ~5000 words per exported context file
-- [ ] Fix filename sanitization — Work_and_Career not Work___Career
-- [ ] Rename master_context.md to full_context.md
-- [ ] Fix grammar — "1 conversations" → "1 conversation"
-- [ ] Checkpoint and resume — save progress, continue interrupted analysis
-- [ ] Startup cleanup of leftover temp files from unclean shutdown
-- [ ] Better classification — Llama 3.1 8B option in Settings
-- [ ] Versioned exports — no silent overwrites
-- [ ] Shutdown button in UI
-- [ ] Test mode — analyze first 10 conversations only
-
-Sprint 3 — Selective Analysis
-- [ ] Pass only selected conversations from Browse tab to analyzer
-- [ ] Skip unselected conversations entirely
-- [ ] Update progress bar to reflect selected count not total
-
-Sprint 4 — Review Tab Rebuild
-- [ ] Show all summarized conversations with current bucket assignment
-- [ ] Checkbox select one or many conversations
-- [ ] Dropdown to reassign selected conversations to existing or new bucket
-- [ ] Confirm button applies reassignment
-
-**v0.3 — Any LLM → Any LLM**
-- [ ] Claude export adapter
-- [ ] Gemini export adapter
+### v0.3 — UI alignment, Deeper User Context  🔄 In Progress
+- [ ] Four-axis extraction redesign — WHO/WHAT/HOW/WHY with tier classification
+- [ ] Cross-conversation synthesis pass — pattern detection across full history
+- [ ] User editing layer — per-conversation promote/demote/delete controls
+- [ ] Profile section editing — edit, extend, or remove any auto-extracted field
+- [ ] Sensitive content flagging — health, financial, family details flagged for review
+- [ ] Selective analysis — wire Browse tab selection to analyzer
+- [ ] WHY section — user-authored motivation layer with guided prompts
 - [ ] Direct Claude Projects API upload
-- [ ] LinkedIn activity export adapter
-- [ ] Delta updates — re-run migrator and merge new conversations only
+- [ ] Delta updates — re-run and merge new conversations only
+- [ ] Test mode UX fix — reliable checkbox, clear conversation cap control
 
-**v1.0 — Packaged for Everyone**
+### v1.0 — Packaged for Everyone
 - [ ] Windows installer (.exe)
 - [ ] Mac installer (.app)
 - [ ] One-click Ollama and model setup
 - [ ] No terminal required
-- [ ] Onboarding interview — structured questions generate your userPreferences block automatically
+- [ ] Onboarding interview — structured questions generate your context profile automatically
+
+---
+
+## Contributing
+
+Contributions welcome, especially:
+
+- **New source adapters** — add support for exporting from other LLM services
+- **New target adapters** — add support for importing to other LLM services
+- **Language translations** — help make this accessible globally
+- **UX improvements** — make it even simpler for non-technical users
+
+See [docs/adding-adapters.md](docs/adding-adapters.md) for how to add a new source or target adapter.
+
+---
+
+## License
+
+MIT — free to use, modify, and distribute.
+
+---
+
+## About
+
+Built by [Don Norbeck](https://darkaidefense.com) — because your accumulated context belongs to you, not to the platform you happened to use when you built it.
+
+[ownyourcontext.com](https://ownyourcontext.com) · [darkaidefense.com](https://darkaidefense.com) · [GitHub](https://github.com/Don-Norbeck/llm-conversation-memory-migrator)
+
+---
+
+*If this tool helped you, star the repo and share it with someone else making the switch.*
