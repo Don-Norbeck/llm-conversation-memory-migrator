@@ -6,7 +6,6 @@ Launches a local Gradio UI — no internet connection required.
 
 import json
 import os
-import random
 import tempfile
 import time
 
@@ -21,10 +20,12 @@ import gradio as gr
 from pathlib import Path
 from datetime import datetime
 
-from adapters.chatgpt import load_from_zip
-from core.summarizer import summarize_all, summarize_all_gen, check_ollama_running, synthesize_biography
-from core.classifier import classify_summaries, get_bucket_stats, get_all_bucket_names
-from core.exporter import export_all
+from core.pipeline import (
+    stage1_ingest, stage2_badge, get_selected_conversations, apply_test_mode,
+    stage4_extract_gen, stage5_classify, stage6_synthesize, stage6_export,
+    check_ollama_running,
+)
+from core.badges import is_noise, badge_summary
 from core import config
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -36,8 +37,10 @@ state = {
     "export_dir": None,
     "analysis_complete": False,
     "ollama_model": None,
+    "psychographic": {},
+    "badge_summary": {},
     # Conversation browser state
-    "conv_table": {},    # id -> {id, title, date_str, date_dt, word_count, selected}
+    "conv_table": {},    # id -> {id, title, date_str, date_dt, word_count, selected, badges, noise}
     "visible_ids": [],   # ordered list of IDs currently shown (after sort/filter)
     "sort_by": "date",
     "from_date": "",
@@ -61,6 +64,7 @@ def _parse_date_str(date_str: str) -> datetime:
 def _build_conv_table(conversations: list) -> dict:
     table = {}
     for conv in conversations:
+        badges = conv.get("badges", [])
         table[conv["id"]] = {
             "id": conv["id"],
             "title": conv["title"],
@@ -68,6 +72,8 @@ def _build_conv_table(conversations: list) -> dict:
             "date_dt": _parse_date_str(conv["created"]),
             "word_count": _word_count(conv),
             "selected": True,
+            "badges": badges,
+            "noise": is_noise(conv),
         }
     return table
 
@@ -109,7 +115,8 @@ def _to_df_rows() -> list:
     rows = []
     for id_ in state["visible_ids"]:
         r = state["conv_table"][id_]
-        rows.append([r["selected"], r["title"], r["date_str"], r["word_count"]])
+        badge_str = ", ".join(r.get("badges", [])[:3])
+        rows.append([r["selected"], r["title"], r["date_str"], r["word_count"], badge_str, r.get("noise", False)])
     return rows
 
 
@@ -133,15 +140,13 @@ def _selection_count_text() -> str:
 # ── Step 1: Upload & Parse ────────────────────────────────────────────────────
 
 def handle_upload(zip_file):
-    """Returns (upload_msg, browser_group_update, df_data, selection_count)."""
-    _hidden = gr.update(visible=False)
-    _empty_df = gr.update(value=[])
-    _no_count = gr.update(value="")
+    """Returns (upload_msg, inspect_btn_update)."""
+    _inspect_hidden = gr.update(visible=False)
 
     if zip_file is None:
         return (
             "❌ No file uploaded. Please upload your ChatGPT export zip.",
-            _hidden, _empty_df, _no_count,
+            _inspect_hidden,
         )
     try:
         tmp_path = None
@@ -150,17 +155,25 @@ def handle_upload(zip_file):
             os.close(tmp_fd)
             with open(tmp_path, 'wb') as f:
                 f.write(zip_file)
-            conversations = load_from_zip(Path(tmp_path))
+            ingest = stage1_ingest(tmp_path)
         finally:
             if tmp_path:
                 try:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
+
+        if "error" in ingest:
+            return (f"❌ Error loading file: {ingest['error']}", _inspect_hidden)
+
+        badged = stage2_badge(ingest["conversations"])
+        conversations = badged["conversations"]
+
         state["conversations"] = conversations
         state["summaries"] = []
         state["grouped"] = {}
         state["analysis_complete"] = False
+        state["badge_summary"] = badged["badge_summary"]
 
         # Build browser state
         state["conv_table"] = _build_conv_table(conversations)
@@ -169,21 +182,80 @@ def handle_upload(zip_file):
         state["to_date"] = ""
         state["visible_ids"] = _apply_sort_filter()
 
-        msg = (
-            f"✅ Successfully loaded **{len(conversations)} conversations**.\n\n"
-            f"Review and select conversations below, then go to **Analyze**.\n\n"
-            f"⏱ Estimated time: {len(conversations) // 10}–{len(conversations) // 5} minutes."
-        )
-        return (
-            msg,
-            gr.update(visible=True),
-            gr.update(value=_to_df_rows()),
-            gr.update(value=_selection_count_text()),
-        )
+        msg = f"✅ Loaded **{len(conversations)} conversations**. Click **Inspect →** to continue."
+        return (msg, gr.update(visible=True))
+
     except FileNotFoundError as e:
-        return (f"❌ Invalid export file: {e}", _hidden, _empty_df, _no_count)
+        return (f"❌ Invalid export file: {e}", _inspect_hidden)
     except Exception as e:
-        return (f"❌ Error loading file: {e}", _hidden, _empty_df, _no_count)
+        return (f"❌ Error loading file: {e}", _inspect_hidden)
+
+
+def _badge_dashboard_html() -> str:
+    """Render the badge inspection dashboard HTML."""
+    conversations = state["conversations"]
+    summary = state["badge_summary"]
+    total = len(conversations)
+    if not total:
+        return ""
+
+    noise_count = sum(1 for c in conversations if is_noise(c))
+    signal_count = total - noise_count
+    noise_pct = round(noise_count / total * 100)
+    signal_pct = round(signal_count / total * 100)
+
+    cards_html = "".join(
+        f'<div style="background:#161b22;border:1px solid rgba(255,107,26,0.12);'
+        f'padding:9px 14px;display:flex;justify-content:space-between;align-items:center;gap:8px">'
+        f'<span style="font-family:\'Space Mono\',monospace;font-size:10px;color:#e6edf3;'
+        f'letter-spacing:0.04em">{name}</span>'
+        f'<span style="font-family:\'Space Mono\',monospace;font-size:13px;font-weight:700;'
+        f'color:#ff6b1a;flex-shrink:0">{count}</span>'
+        f'</div>'
+        for name, count in summary.items()
+    )
+
+    return (
+        f'<div style="background:#0d1117;border:1px solid rgba(255,107,26,0.2);'
+        f'padding:20px 24px;font-family:\'Space Mono\',monospace">'
+        f'<div style="font-size:10px;color:#ff6b1a;letter-spacing:0.15em;'
+        f'text-transform:uppercase;margin-bottom:18px">// BADGE INSPECTION REPORT</div>'
+        f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:22px">'
+        f'<div style="background:#161b22;border:1px solid rgba(255,107,26,0.2);padding:14px 16px">'
+        f'<div style="font-size:9px;color:#8b949e;letter-spacing:0.15em;text-transform:uppercase;margin-bottom:6px">Total</div>'
+        f'<div style="font-size:30px;font-weight:700;color:#e6edf3;line-height:1">{total}</div>'
+        f'<div style="font-size:9px;color:#8b949e;margin-top:3px">conversations</div>'
+        f'</div>'
+        f'<div style="background:#161b22;border:1px solid rgba(255,107,26,0.2);padding:14px 16px">'
+        f'<div style="font-size:9px;color:#8b949e;letter-spacing:0.15em;text-transform:uppercase;margin-bottom:6px">Noise</div>'
+        f'<div style="font-size:30px;font-weight:700;color:#ff6b1a;line-height:1">{noise_count}</div>'
+        f'<div style="font-size:9px;color:#8b949e;margin-top:3px">{noise_pct}% of total</div>'
+        f'</div>'
+        f'<div style="background:#161b22;border:1px solid rgba(255,107,26,0.2);padding:14px 16px">'
+        f'<div style="font-size:9px;color:#8b949e;letter-spacing:0.15em;text-transform:uppercase;margin-bottom:6px">Signal</div>'
+        f'<div style="font-size:30px;font-weight:700;color:#00c9b1;line-height:1">{signal_count}</div>'
+        f'<div style="font-size:9px;color:#8b949e;margin-top:3px">{signal_pct}% of total</div>'
+        f'</div>'
+        f'</div>'
+        f'<div style="font-size:9px;color:#ff6b1a;letter-spacing:0.15em;'
+        f'text-transform:uppercase;margin-bottom:10px">BADGE BREAKDOWN</div>'
+        f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">'
+        f'{cards_html}'
+        f'</div>'
+        f'</div>'
+    )
+
+
+def handle_inspect():
+    """Legacy handler — kept for compatibility."""
+    if not state["conversations"]:
+        return gr.update(value=""), gr.update(visible=False), gr.update(value=[]), gr.update(value="")
+    return (
+        gr.update(value=_badge_dashboard_html()),
+        gr.update(visible=True),
+        gr.update(value=_to_df_rows()),
+        gr.update(value=_selection_count_text()),
+    )
 
 
 # ── Browser: sort handlers ─────────────────────────────────────────────────────
@@ -241,13 +313,19 @@ def handle_deselect_all():
     return gr.update(value=_to_df_rows()), gr.update(value=_selection_count_text())
 
 
+def handle_deselect_noise():
+    for id_ in state["visible_ids"]:
+        if state["conv_table"][id_].get("noise", False):
+            state["conv_table"][id_]["selected"] = False
+    return gr.update(value=_to_df_rows()), gr.update(value=_selection_count_text())
+
+
 # ── Browser: sync checkbox edits back to state ────────────────────────────────
 
 def handle_table_change(df_data):
     if df_data is None or not state["visible_ids"]:
         return gr.update(value=_selection_count_text())
 
-    # df_data may be a pandas DataFrame or list-of-lists
     if hasattr(df_data, "values"):
         rows = df_data.values.tolist()
     else:
@@ -265,7 +343,6 @@ def handle_table_change(df_data):
 # ── Step 2: Analyze ───────────────────────────────────────────────────────────
 
 def _progress_html(text: str, current: int = 0, total: int = 0) -> str:
-    """Render a two-line status: text on line 1, progress bar + % on line 2."""
     if total > 0:
         pct = int(current / total * 100)
         bar = (
@@ -283,9 +360,8 @@ def _progress_html(text: str, current: int = 0, total: int = 0) -> str:
 
 def handle_analyze():
     def _yields(status, output, choices=None):
-        """Helper: yield a consistent 4-tuple for all outputs."""
         update = gr.update(choices=choices, value=None) if choices is not None else gr.update()
-        yield status, output, update, gr.update()
+        yield status, output, update, gr.update(), gr.update()
 
     if not state["conversations"]:
         yield from _yields(
@@ -295,7 +371,6 @@ def handle_analyze():
         )
         return
 
-    # ── Double-run warning ───────────────────────────────────────────────────
     if state["analysis_complete"]:
         yield from _yields(
             "",
@@ -312,32 +387,13 @@ def handle_analyze():
             "❌ Ollama is not running.\n\n"
             "Please start Ollama and try again.\n"
             "On Windows: Open the Ollama app from your Start menu.\n"
-            "Then run: `ollama pull llama3.2`",
+            "Then run: `ollama pull mistral-nemo`",
             [],
         )
         return
 
-    # Respect selection — if a subset is selected, only analyze those
-    conversations = state["conversations"]
-    if state["conv_table"]:
-        selected = [
-            c for c in conversations
-            if state["conv_table"].get(c["id"], {}).get("selected", True)
-        ]
-        if 0 < len(selected) < len(conversations):
-            conversations = selected
-
-    # Apply test mode random sample
-    if config.get("test_mode", False):
-        n = int(config.get("test_mode_n", 20))
-        total_available = len(conversations)
-        if total_available <= n:
-            print(f"Test mode: only {total_available} conversations available, using all.")
-        else:
-            conversations = random.sample(conversations, n)
-            print(f"Test mode: randomly selected {n} of {total_available} conversations:")
-            for c in conversations:
-                print(f"  - {c.get('title', 'Untitled')}")
+    conversations = get_selected_conversations(state["conversations"], state["conv_table"])
+    conversations = apply_test_mode(conversations)
 
     ollama_cfg = config.get_ollama_config()
     total = len(conversations)
@@ -348,17 +404,17 @@ def handle_analyze():
         s = int(time.time() - start_time)
         return f"{s // 60}:{s % 60:02d}"
 
-    # Show model-loading message immediately before first Ollama call
     yield (
         _progress_html("⏳ Loading model into memory — first summary may take 20–30 seconds…"),
         "",
+        gr.update(),
         gr.update(),
         gr.update(),
     )
 
     summary_style = config.get("summary_style", "concise")
     state["ollama_model"] = ollama_cfg["model"]
-    for current, total, title, summary in summarize_all_gen(
+    for current, total, title, summary in stage4_extract_gen(
         conversations,
         model=ollama_cfg["model"],
         summary_style=summary_style,
@@ -366,31 +422,31 @@ def handle_analyze():
         if summary:
             summaries.append(summary)
         status_text = f"⏳ Summarizing {current} of {total}: {title} — elapsed: {_elapsed_str()}"
-        yield _progress_html(status_text, current, total), "", gr.update(), gr.update()
+        yield _progress_html(status_text, current, total), "", gr.update(), gr.update(), gr.update()
 
     state["summaries"] = summaries
-    grouped = classify_summaries(summaries)
-    state["grouped"] = grouped
+    classify_result = stage5_classify(summaries)
+    state["grouped"] = classify_result["grouped"]
     state["analysis_complete"] = True
 
-    stats = get_bucket_stats(grouped)
-    bucket_names = get_all_bucket_names(grouped)
+    stats = classify_result["stats"]
+    bucket_names = classify_result["bucket_names"]
 
-    # Yield synthesis-in-progress status before the (slow) LLM synthesis call
     yield (
         _progress_html(f"⏳ Synthesizing biography profile — elapsed: {_elapsed_str()}"),
         "",
         gr.update(choices=bucket_names, value=None),
         gr.update(),
+        gr.update(),
     )
 
     model = state.get("ollama_model") or config.get_ollama_config()["model"]
     out_dir = config.get_output_dir()
-    print(f"[path] synthesize_biography writing to: {out_dir / 'get_to_know_me.md'}")
-    user_name = config.get_user_name()
-    print(f"[app] user_name from config: '{user_name}'")
-    result = synthesize_biography(state["summaries"], out_dir, model=model, user_name=user_name)
+    synth = stage6_synthesize(state["summaries"], out_dir, model=model)
+    result = None if "error" in synth else synth
     state["export_dir"] = str(out_dir)
+    if result and "psychographic" in result:
+        state["psychographic"] = result["psychographic"]
 
     lines = [f"✅ Analysis complete — **{len(summaries)}/{total} summarized in {_elapsed_str()}**\n"]
     if result is None:
@@ -409,11 +465,11 @@ def handle_analyze():
         "\n".join(lines),
         gr.update(choices=bucket_names, value=None),
         _read_biography(),
+        _render_psychographic_html(state["psychographic"]),
     )
 
 
 # ── Step 3: Review ────────────────────────────────────────────────────────────
-
 
 def _tier_badge(tier: str) -> str:
     colours = {"signal": "#1a7f4b", "noise": "#888", "review": "#b45309"}
@@ -447,7 +503,7 @@ def handle_view_summaries(bucket_name: str) -> str:
         title = c.get("title", "Untitled")
         date = c.get("created", "")
         tier = c.get("tier", "")
-        topic = (c.get("what") or {}).get("topic", "")
+        topic = c.get("topic", "")
 
         who = c.get("who") or {}
         if not isinstance(who, dict):
@@ -458,37 +514,42 @@ def handle_view_summaries(bucket_name: str) -> str:
         how = c.get("how") or {}
         if not isinstance(how, dict):
             how = {}
+        names = c.get("names") or []
+        if not isinstance(names, list):
+            names = []
 
         rows = []
 
-        # ── WHO ──────────────────────────────────────────────────────────────
         who_parts = []
         if who.get("role"):
             who_parts.append(f"<em>Role:</em> {who['role']}")
         if who.get("expertise"):
             who_parts.append(f"<em>Expertise:</em> {_pill_list(who['expertise'])}")
+        if who.get("interests"):
+            who_parts.append(f"<em>Interests:</em> {_pill_list(who['interests'])}")
+        if who.get("help_seeking"):
+            who_parts.append(f"<em>Help sought:</em> {_pill_list(who['help_seeking'])}")
         if who.get("credentials"):
             who_parts.append(f"<em>Credentials:</em> {_pill_list(who['credentials'])}")
         if who_parts:
             rows.append(_section("WHO", " &nbsp;·&nbsp; ".join(who_parts)))
 
-        # ── WHAT ─────────────────────────────────────────────────────────────
         what_parts = []
-        if what.get("outcome"):
-            what_parts.append(what["outcome"])
-        if what.get("depth"):
-            what_parts.append(f"<em>Depth:</em> {what['depth']}")
+        if what.get("goal"):
+            what_parts.append(what["goal"])
         if what.get("project"):
             what_parts.append(f"<em>Project:</em> {what['project']}")
+        outcome = what.get("outcome")
+        if outcome:
+            what_parts.append(f"<em>Outcome:</em> {outcome}")
         if what.get("open_thread"):
             what_parts.append(f"<em>Open:</em> {what['open_thread']}")
         if what_parts:
             rows.append(_section("WHAT", " &nbsp;·&nbsp; ".join(what_parts)))
 
-        # ── HOW ──────────────────────────────────────────────────────────────
         how_parts = []
-        if how.get("initial_prompt"):
-            how_parts.append(f"<em>Opening ask:</em> {how['initial_prompt']}")
+        if how.get("tone"):
+            how_parts.append(f"<em>Tone:</em> {how['tone']}")
         if how.get("corrections"):
             how_parts.append(f"<em>Corrections:</em> {_pill_list(how['corrections'])}")
         if how.get("your_words"):
@@ -497,7 +558,9 @@ def handle_view_summaries(bucket_name: str) -> str:
         if how_parts:
             rows.append(_section("HOW", " &nbsp;·&nbsp; ".join(how_parts)))
 
-        # ── Raw JSON toggle ───────────────────────────────────────────────────
+        if names:
+            rows.append(_section("Names", _pill_list(names)))
+
         raw_json = json.dumps(c, indent=2, ensure_ascii=False)
         raw_toggle = (
             f'<details style="margin-top:10px">'
@@ -528,15 +591,61 @@ def handle_view_summaries(bucket_name: str) -> str:
 # ── Step 4: Export ────────────────────────────────────────────────────────────
 
 def _read_biography() -> str:
-    """Read get_to_know_me.md from the configured output directory."""
     bio_path = config.get_output_dir() / "get_to_know_me.md"
-    print(f"[path] _read_biography reading from: {bio_path}")
     if not bio_path.exists():
         return "_Run Export to generate your biography profile._"
     try:
         return bio_path.read_text(encoding="utf-8")
     except OSError:
         return "_Run Export to generate your biography profile._"
+
+
+def _render_psychographic_html(psychographic: dict) -> str:
+    if not psychographic or not psychographic.get("axes"):
+        return ""
+
+    parts = []
+    for ax in psychographic.get("axes", []):
+        name = ax.get("axis", "")
+        try:
+            score = float(ax.get("score", 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
+        archetype = ax.get("archetype", "")
+        evidence = ax.get("evidence", "")
+        pct = (score / 5.0) * 100
+
+        bar = (
+            f'<div style="display:flex;align-items:center;gap:8px;margin:4px 0">'
+            f'<div style="width:140px;background:#1a1a2e;border-radius:3px;height:8px;flex-shrink:0">'
+            f'<div style="width:{pct:.0f}%;background:#ff6b1a;border-radius:3px;height:8px"></div>'
+            f'</div>'
+            f'<span style="color:#e6edf3;font-size:0.85em">{score:.1f} / 5.0</span>'
+            f'</div>'
+        )
+        parts.append(
+            f'<div style="margin-bottom:14px">'
+            f'<div><span style="color:#ff6b1a;font-weight:600">{name}</span>'
+            f'<span style="color:#e6edf3;font-size:0.9em"> — {archetype}</span></div>'
+            f'{bar}'
+            f'<div style="color:#8b949e;font-size:0.82em;font-style:italic">{evidence}</div>'
+            f'</div>'
+        )
+
+    composite = psychographic.get("composite_archetype", "")
+    archetype_summary = psychographic.get("archetype_summary", "")
+    footer = ""
+    if composite:
+        footer += f'<div style="margin-top:16px;font-size:1.2em;font-weight:700;color:#ff6b1a">{composite}</div>'
+    if archetype_summary:
+        footer += f'<div style="color:#e6edf3;margin-top:6px">{archetype_summary}</div>'
+
+    return (
+        f'<div style="background:#0d1117;border:1px solid rgba(255,107,26,0.2);'
+        f'border-radius:8px;padding:16px 20px;margin-bottom:16px">'
+        + "".join(parts) + footer
+        + f'</div>'
+    )
 
 
 def handle_export(output_path: str):
@@ -548,16 +657,16 @@ def handle_export(output_path: str):
     if not output_path.strip():
         output_path = str(config.get_output_dir())
 
-    # Windows path length guard
     if len(output_path) > 200:
         return "❌ Output path is too long. Please choose a shorter folder path.", _no_change
 
     try:
         out_dir = Path(output_path)
-        user_name = config.get_user_name()
-        exported = export_all(state["grouped"], out_dir, user_name)
+        export_result = stage6_export(state["grouped"], state["summaries"], out_dir)
+        if "error" in export_result:
+            raise Exception(export_result["error"])
+        exported = export_result["exported"]
 
-        # Copy get_to_know_me.md to the user-specified export dir if it differs
         src_bio = config.get_output_dir() / "get_to_know_me.md"
         dst_bio = out_dir / "get_to_know_me.md"
         if src_bio.exists() and src_bio.resolve() != dst_bio.resolve():
@@ -597,52 +706,248 @@ def handle_export(output_path: str):
 # ── Dark theme CSS ────────────────────────────────────────────────────────────
 
 DARK_CSS = """
-/* Base */
-body, .gradio-container, .main, footer { background:#080c10 !important; color:#e6edf3 !important; }
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Barlow+Condensed:wght@300;400;600;800&family=Barlow:wght@300;400;500&display=swap');
 
-/* Tabs */
-.tab-nav button { background:#161b22 !important; color:#8b949e !important; border-color:rgba(255,107,26,0.2) !important; }
-.tab-nav button.selected { background:#0d1117 !important; color:#e6edf3 !important; border-bottom-color:#ff6b1a !important; }
+body, .gradio-container, .main, footer {
+    background: #080c10 !important;
+    color: #e6edf3 !important;
+    font-family: 'Barlow', sans-serif !important;
+}
 
-/* Inputs, textboxes, dropdowns */
+body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+        linear-gradient(rgba(255,107,26,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,107,26,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.tab-nav {
+    border-bottom: 1px solid rgba(255,107,26,0.2) !important;
+    background: #0d1117 !important;
+}
+.tab-nav button {
+    background: #0d1117 !important;
+    color: #8b949e !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    font-family: 'Space Mono', monospace !important;
+    font-size: 11px !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    padding: 12px 20px !important;
+    border-radius: 0 !important;
+    transition: all 0.2s !important;
+}
+.tab-nav button:hover {
+    color: #ff6b1a !important;
+    background: #161b22 !important;
+}
+.tab-nav button.selected {
+    background: #080c10 !important;
+    color: #ff6b1a !important;
+    border-bottom: 2px solid #ff6b1a !important;
+}
+
 input, textarea, select,
-.gr-input, .gr-textbox textarea, .gr-textbox input,
-.block.svelte-90oupt input, .block.svelte-90oupt textarea {
-    background:#1a1a2e !important;
-    color:#e6edf3 !important;
-    border-color:rgba(255,107,26,0.2) !important;
+.gr-input, .gr-textbox textarea, .gr-textbox input {
+    background: #0d1117 !important;
+    color: #e6edf3 !important;
+    border: 1px solid rgba(255,107,26,0.2) !important;
+    border-radius: 0 !important;
+    font-family: 'Space Mono', monospace !important;
+    font-size: 12px !important;
 }
-input::placeholder, textarea::placeholder { color:#8b949e !important; }
+input:focus, textarea:focus {
+    border-color: #ff6b1a !important;
+    box-shadow: 0 0 0 2px rgba(255,107,26,0.1) !important;
+    outline: none !important;
+}
+input::placeholder, textarea::placeholder { color: #8b949e !important; }
 
-/* Labels */
-label span, .gr-label, .block label > span { color:#e6edf3 !important; }
+label span, .gr-label, .block label > span {
+    color: #8b949e !important;
+    font-family: 'Space Mono', monospace !important;
+    font-size: 11px !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+}
 
-/* Markdown prose */
 .prose, .prose p, .prose li, .prose h1, .prose h2, .prose h3,
-.gr-markdown, .gr-markdown p { color:#e6edf3 !important; }
-
-/* Panels / blocks */
-.gr-panel, .gr-box, .block { background:#0d1117 !important; border-color:rgba(255,107,26,0.2) !important; }
-
-/* Secondary buttons */
-.gr-button-secondary, button.secondary {
-    background:#161b22 !important;
-    color:#e6edf3 !important;
-    border-color:rgba(255,107,26,0.2) !important;
+.gr-markdown, .gr-markdown p {
+    color: #e6edf3 !important;
+    font-family: 'Barlow', sans-serif !important;
+}
+.prose h1, .prose h2, .prose h3,
+.gr-markdown h1, .gr-markdown h2, .gr-markdown h3 {
+    font-family: 'Barlow Condensed', sans-serif !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    color: #e6edf3 !important;
+    letter-spacing: 0.02em !important;
+}
+.prose strong, .gr-markdown strong { color: #ff6b1a !important; }
+.prose code, .gr-markdown code {
+    background: #161b22 !important;
+    color: #00c9b1 !important;
+    font-family: 'Space Mono', monospace !important;
+    font-size: 12px !important;
+    padding: 2px 6px !important;
+    border-radius: 0 !important;
 }
 
-/* Dropdown list */
-.gr-dropdown ul, .dropdown-arrow, ul.options { background:#161b22 !important; }
-.gr-dropdown ul li:hover { background:#1a1a2e !important; }
+.gr-panel, .gr-box, .block, .contain {
+    background: #0d1117 !important;
+    border: 1px solid rgba(255,107,26,0.15) !important;
+    border-radius: 0 !important;
+}
 
-/* Dataframe */
-.gr-dataframe table { background:#0d1117 !important; color:#e6edf3 !important; }
-.gr-dataframe th { background:#161b22 !important; color:#ff6b1a !important; }
-.gr-dataframe td { border-color:rgba(255,107,26,0.1) !important; }
+button.primary, .gr-button-primary, button[variant="primary"] {
+    background: #ff6b1a !important;
+    color: #000 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    font-family: 'Space Mono', monospace !important;
+    font-size: 12px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+    transition: all 0.2s !important;
+}
+button.primary:hover, .gr-button-primary:hover {
+    background: #fff !important;
+    color: #000 !important;
+    transform: translateY(-1px) !important;
+}
 
-/* HTML output container */
-.gr-html { background:#0d1117 !important; color:#e6edf3 !important; }
+button.secondary, .gr-button-secondary, button[variant="secondary"] {
+    background: #161b22 !important;
+    color: #e6edf3 !important;
+    border: 1px solid rgba(255,107,26,0.2) !important;
+    border-radius: 0 !important;
+    font-family: 'Space Mono', monospace !important;
+    font-size: 12px !important;
+    letter-spacing: 0.05em !important;
+    text-transform: uppercase !important;
+    transition: all 0.2s !important;
+}
+button.secondary:hover {
+    border-color: #ff6b1a !important;
+    color: #ff6b1a !important;
+}
+
+.gr-dropdown ul, ul.options {
+    background: #161b22 !important;
+    border: 1px solid rgba(255,107,26,0.2) !important;
+    border-radius: 0 !important;
+}
+.gr-dropdown ul li:hover { background: #1e2530 !important; color: #ff6b1a !important; }
+
+.gr-dataframe table {
+    background: #0d1117 !important;
+    color: #e6edf3 !important;
+    font-family: 'Space Mono', monospace !important;
+    font-size: 12px !important;
+}
+.gr-dataframe th {
+    background: #161b22 !important;
+    color: #ff6b1a !important;
+    font-family: 'Space Mono', monospace !important;
+    font-size: 11px !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    border-color: rgba(255,107,26,0.2) !important;
+}
+.gr-dataframe td { border-color: rgba(255,107,26,0.08) !important; }
+.gr-dataframe tr:hover td { background: rgba(255,107,26,0.04) !important; }
+
+.gr-html, .output-html {
+    background: #0d1117 !important;
+    color: #e6edf3 !important;
+    font-family: 'Space Mono', monospace !important;
+    border: 1px solid rgba(255,107,26,0.15) !important;
+    border-top: 3px solid #ff6b1a !important;
+    border-radius: 0 !important;
+    padding: 16px !important;
+}
+
+.progress-bar { background: #ff6b1a !important; }
+.progress-bar-wrap { background: #161b22 !important; border-radius: 0 !important; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: rgba(255,107,26,0.4); border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: #ff6b1a; }
+
+.upload-container, [data-testid="file-upload"] {
+    background: #0d1117 !important;
+    border: 1px dashed rgba(255,107,26,0.3) !important;
+    border-radius: 0 !important;
+    transition: border-color 0.2s !important;
+}
+.upload-container:hover, [data-testid="file-upload"]:hover {
+    border-color: #ff6b1a !important;
+}
+
+.gr-accordion { border-color: rgba(255,107,26,0.2) !important; border-radius: 0 !important; }
+.gr-accordion-header {
+    background: #161b22 !important;
+    color: #e6edf3 !important;
+    font-family: 'Space Mono', monospace !important;
+    font-size: 11px !important;
+    letter-spacing: 0.08em !important;
+}
 """
+
+
+# ── Step indicator ────────────────────────────────────────────────────────────
+
+_STEP_LABELS = ["Setup", "Upload", "Inspect", "Extract", "Review", "Export"]
+
+
+def step_indicator_html(current: int) -> str:
+    parts = []
+    for i, label in enumerate(_STEP_LABELS):
+        if i < current:
+            dot_bg = "#00c9b1"
+            dot_border = "#00c9b1"
+            label_color = "#00c9b1"
+        elif i == current:
+            dot_bg = "#ff6b1a"
+            dot_border = "#ff6b1a"
+            label_color = "#ff6b1a"
+        else:
+            dot_bg = "#1a1a2e"
+            dot_border = "rgba(255,107,26,0.2)"
+            label_color = "#8b949e"
+
+        parts.append(
+            f'<div style="display:flex;flex-direction:column;align-items:center;gap:5px">'
+            f'<div style="width:14px;height:14px;border-radius:50%;'
+            f'background:{dot_bg};border:2px solid {dot_border}"></div>'
+            f'<span style="font-family:\'Space Mono\',monospace;font-size:9px;'
+            f'color:{label_color};letter-spacing:0.06em;text-transform:uppercase">'
+            f'{label}</span>'
+            f'</div>'
+        )
+        if i < len(_STEP_LABELS) - 1:
+            connector_bg = "#00c9b1" if i < current else "rgba(255,107,26,0.15)"
+            parts.append(
+                f'<div style="flex:1;height:2px;background:{connector_bg};'
+                f'margin-bottom:20px;min-width:24px"></div>'
+            )
+
+    return (
+        f'<div style="padding:14px 32px;background:#080c10;'
+        f'border-bottom:1px solid rgba(255,107,26,0.15)">'
+        f'<div style="display:flex;align-items:center;max-width:640px">'
+        + "".join(parts)
+        + f'</div></div>'
+    )
 
 
 # ── UI Layout ─────────────────────────────────────────────────────────────────
@@ -651,272 +956,190 @@ def build_ui():
     cfg = config.load_config()
 
     with gr.Blocks(
-        title="LLM Conversation Memory Migrator",
-        css=DARK_CSS,
+        title="OwnYourContext — LLM Conversation Memory Migrator",
     ) as app:
 
         # ── Header ──────────────────────────────────────────────────────────
         gr.HTML("""
-            <div style="text-align:center; padding:20px;">
-                <h1>🔄 LLM Conversation Memory Migrator</h1>
-                <p style="font-size:1.1em; color:#666;">
-                    Move your mind, not just your messages.
-                </p>
-                <div>
-                    <span style="background:#1a1a2e; color:#00ff88; padding:8px 16px; border-radius:20px; font-size:0.85em; margin:4px; display:inline-block;">🔒 100% Local</span>
-                    <span style="background:#1a1a2e; color:#00ff88; padding:8px 16px; border-radius:20px; font-size:0.85em; margin:4px; display:inline-block;">🚫 No Cloud</span>
-                    <span style="background:#1a1a2e; color:#00ff88; padding:8px 16px; border-radius:20px; font-size:0.85em; margin:4px; display:inline-block;">🛡️ No Data Sharing</span>
-                    <span style="background:#1a1a2e; color:#00ff88; padding:8px 16px; border-radius:20px; font-size:0.85em; margin:4px; display:inline-block;">✅ Open Source</span>
+            <div style="border-bottom:1px solid rgba(255,107,26,0.2); padding:24px 32px 22px; background:#080c10;">
+                <div style="font-family:'Space Mono',monospace; font-size:10px; color:#ff6b1a; letter-spacing:0.2em; text-transform:uppercase; margin-bottom:12px;">
+                    // V0.3 &middot; OPEN SOURCE &middot; 100% LOCAL &middot; NO CLOUD
+                </div>
+                <div style="font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:38px; text-transform:uppercase; letter-spacing:0.02em; color:#e6edf3; line-height:1; margin-bottom:6px;">
+                    OWNYOURCONTEXT
+                </div>
+                <div style="font-family:'Barlow Condensed',sans-serif; font-weight:300; font-size:15px; color:#8b949e; text-transform:uppercase; letter-spacing:0.12em; margin-bottom:18px;">
+                    YOUR AI MEMORY. YOUR MACHINE. YOUR CALL.
+                </div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <span style="display:inline-flex; align-items:center; gap:6px; background:rgba(0,201,177,0.05); border:1px solid rgba(0,201,177,0.25); color:#00c9b1; font-family:'Space Mono',monospace; font-size:10px; letter-spacing:0.08em; padding:5px 12px;">🔒 100% Local</span>
+                    <span style="display:inline-flex; align-items:center; gap:6px; background:rgba(0,201,177,0.05); border:1px solid rgba(0,201,177,0.25); color:#00c9b1; font-family:'Space Mono',monospace; font-size:10px; letter-spacing:0.08em; padding:5px 12px;">🚫 No Cloud</span>
+                    <span style="display:inline-flex; align-items:center; gap:6px; background:rgba(0,201,177,0.05); border:1px solid rgba(0,201,177,0.25); color:#00c9b1; font-family:'Space Mono',monospace; font-size:10px; letter-spacing:0.08em; padding:5px 12px;">🛡️ No Data Sharing</span>
+                    <span style="display:inline-flex; align-items:center; gap:6px; background:rgba(0,201,177,0.05); border:1px solid rgba(0,201,177,0.25); color:#00c9b1; font-family:'Space Mono',monospace; font-size:10px; letter-spacing:0.08em; padding:5px 12px;">✅ Open Source — MIT</span>
                 </div>
             </div>
         """)
 
+        # ── Step indicator ───────────────────────────────────────────────────
+        step_indicator = gr.HTML(value=step_indicator_html(0))
+
+        # ── Wizard helpers ───────────────────────────────────────────────────
+        def show_step(n):
+            return [gr.update(visible=(i == n)) for i in range(6)]
+
+        def _nav(n):
+            return [gr.update(value=step_indicator_html(n))] + show_step(n)
+
+        # ── Step 0: Setup ────────────────────────────────────────────────────
+        with gr.Column(visible=True) as col_step0:
+            gr.Markdown("## Step 0 — Setup")
+            gr.Markdown("Step 0 content coming soon")
+            with gr.Row():
+                back0 = gr.Button("← Back", visible=False)
+                next0 = gr.Button("Next →", variant="primary")
+
         # ── Step 1: Upload ───────────────────────────────────────────────────
-        with gr.Tab("① Upload"):
-            gr.Markdown("""
-            ### Upload Your ChatGPT Export
-
-            **How to export from ChatGPT:**
-            1. Go to chatgpt.com → Settings → Data Controls
-            2. Click **Export Data**
-            3. Wait for the email from OpenAI
-            4. Download the zip file and upload it below
-            """)
-
-            upload_input = gr.File(
-                label="Upload ChatGPT Export (.zip)",
+        with gr.Column(visible=True) as col_step1:
+            gr.Markdown(
+                "## Step 1 — Upload\n\n"
+                "Export your conversations from ChatGPT: **Settings → Data Controls → Export data**.\n\n"
+                "Once the download email arrives, locate the `.zip` file and drop it below."
+            )
+            zip_upload = gr.File(
+                label="ChatGPT Export ZIP",
                 file_types=[".zip"],
-                type="binary"
+                type="binary",
             )
-            upload_btn = gr.Button("📂 Load Export", variant="primary")
-            upload_output = gr.Markdown()
+            load_btn = gr.Button("LOAD EXPORT", variant="primary")
+            upload_msg = gr.Markdown("")
+            inspect_btn = gr.Button("INSPECT →", variant="primary", visible=False)
+            with gr.Row():
+                back1 = gr.Button("← Back")
 
-            # ── Conversation browser (hidden until a zip is loaded) ──────────
-            with gr.Group(visible=False) as conv_browser_group:
-                gr.Markdown("---\n### Conversation Browser")
-                gr.Markdown(
-                    "Check or uncheck conversations to include/exclude them from analysis. "
-                    "If nothing is deselected, all conversations are analyzed."
-                )
-
-                # Sort controls
-                with gr.Row():
-                    gr.Markdown("**Sort:**")
-                    sort_date_btn  = gr.Button("📅 Date", size="sm", scale=0)
-                    sort_size_btn  = gr.Button("📝 Size", size="sm", scale=0)
-                    sort_title_btn = gr.Button("🔤 Title", size="sm", scale=0)
-
-                # Date filter controls
-                with gr.Row():
-                    from_date_input = gr.Textbox(
-                        label="From (YYYY-MM-DD)",
-                        placeholder="e.g. 2023-01-01",
-                        scale=2,
-                    )
-                    to_date_input = gr.Textbox(
-                        label="To (YYYY-MM-DD)",
-                        placeholder="e.g. 2024-12-31",
-                        scale=2,
-                    )
-                    filter_btn = gr.Button("🔍 Apply Filter", scale=1)
-                    clear_filter_btn = gr.Button("✖ Clear", scale=1)
-
-                # Selection controls + count
-                with gr.Row():
-                    select_all_btn   = gr.Button("✅ Select All",   size="sm", scale=0)
-                    deselect_all_btn = gr.Button("⬜ Deselect All", size="sm", scale=0)
-                    selection_count  = gr.Markdown(value="")
-
-                # The table
-                conv_df = gr.Dataframe(
-                    headers=["✓", "Title", "Date", "Words"],
-                    datatype=["bool", "str", "str", "number"],
-                    interactive=True,
-                    wrap=False,
-                )
-
-            # Wire upload button
-            upload_btn.click(
-                fn=handle_upload,
-                inputs=[upload_input],
-                outputs=[upload_output, conv_browser_group, conv_df, selection_count],
-            )
-
-            # Wire sort buttons
-            sort_date_btn.click(
-                fn=handle_sort_date, inputs=[], outputs=[conv_df, selection_count]
-            )
-            sort_size_btn.click(
-                fn=handle_sort_size, inputs=[], outputs=[conv_df, selection_count]
-            )
-            sort_title_btn.click(
-                fn=handle_sort_title, inputs=[], outputs=[conv_df, selection_count]
-            )
-
-            # Wire filter buttons
-            filter_btn.click(
-                fn=handle_apply_filter,
-                inputs=[from_date_input, to_date_input],
-                outputs=[conv_df, selection_count],
-            )
-            clear_filter_btn.click(
-                fn=handle_clear_filter,
-                inputs=[],
-                outputs=[from_date_input, to_date_input, conv_df, selection_count],
-            )
-
-            # Wire select/deselect buttons
-            select_all_btn.click(
-                fn=handle_select_all, inputs=[], outputs=[conv_df, selection_count]
-            )
-            deselect_all_btn.click(
-                fn=handle_deselect_all, inputs=[], outputs=[conv_df, selection_count]
-            )
-
-            # Sync checkbox edits back to state
-            conv_df.change(
-                fn=handle_table_change,
-                inputs=[conv_df],
-                outputs=[selection_count],
-            )
-
-        # ── Step 2: Analyze ──────────────────────────────────────────────────
-        with gr.Tab("② Analyze"):
-            gr.Markdown("""
-            ### Analyze Your Conversations
-
-            Local AI (Ollama + Llama 3.2) will read and summarize your
-            conversations — entirely on your machine.
-
-            **This may take 5–20 minutes depending on your history size.**
-            """)
-
-            analyze_btn = gr.Button(
-                "🧠 Analyze with Local AI",
-                variant="primary"
-            )
-            analyze_status = gr.HTML(value="")
-            analyze_output = gr.Markdown()
-
-        # ── Step 3: Review ───────────────────────────────────────────────────
-        with gr.Tab("③ Review"):
-            gr.Markdown("### Review Extractions")
-
-            summary_bucket_dd = gr.Dropdown(
-                label="Bucket:",
-                choices=[],
+        # ── Step 2: Inspect ──────────────────────────────────────────────────
+        with gr.Column(visible=True) as col_step2:
+            gr.Markdown("## Step 2 — Inspect\n\nReview your conversations before running analysis.")
+            scan_btn = gr.Button("RUN BADGE SCAN", variant="primary")
+            badge_dashboard_html = gr.HTML("")
+            selection_count = gr.Markdown("")
+            with gr.Row():
+                sort_date_btn = gr.Button("Date", variant="secondary")
+                sort_size_btn = gr.Button("Size", variant="secondary")
+                sort_title_btn = gr.Button("Title", variant="secondary")
+            with gr.Row():
+                from_date_tb = gr.Textbox(label="From (YYYY-MM-DD)", placeholder="2024-01-01", scale=2)
+                to_date_tb = gr.Textbox(label="To (YYYY-MM-DD)", placeholder="2024-12-31", scale=2)
+                apply_filter_btn = gr.Button("Apply Filter", variant="secondary")
+                clear_filter_btn = gr.Button("Clear", variant="secondary")
+            with gr.Row():
+                select_all_btn = gr.Button("Select All", variant="secondary")
+                deselect_all_btn = gr.Button("Deselect All", variant="secondary")
+                deselect_noise_btn = gr.Button("🗑 Deselect Noise", variant="secondary")
+            conv_df = gr.Dataframe(
+                headers=["✓", "Title", "Date", "Words", "Badges", "Noise"],
+                datatype=["bool", "str", "str", "number", "str", "str"],
                 interactive=True,
             )
-            summary_viewer = gr.HTML(value="")
+            analyze_btn = gr.Button("ANALYZE SELECTED →", variant="primary")
+            with gr.Row():
+                back2 = gr.Button("← Back")
 
-            gr.Markdown("---\n### 📋 Biography Preview")
-            biography_preview = gr.Markdown(value=_read_biography())
+        # ── Step 3: Extract ──────────────────────────────────────────────────
+        with gr.Column(visible=True) as col_step3:
+            gr.Markdown("## Step 3 — Extract")
+            gr.Markdown("Step 3 content coming soon")
+            with gr.Row():
+                back3 = gr.Button("← Back")
+                next3 = gr.Button("Next →", variant="primary")
 
-            # Wire analyze button now that dropdowns are defined
-            analyze_btn.click(
-                fn=handle_analyze,
-                inputs=[],
-                outputs=[analyze_status, analyze_output, summary_bucket_dd, biography_preview]
-            )
+        # ── Step 4: Review ───────────────────────────────────────────────────
+        with gr.Column(visible=True) as col_step4:
+            gr.Markdown("## Step 4 — Review")
+            gr.Markdown("Step 4 content coming soon")
+            with gr.Row():
+                back4 = gr.Button("← Back")
+                next4 = gr.Button("Next →", variant="primary")
 
-            summary_bucket_dd.change(
-                fn=handle_view_summaries,
-                inputs=[summary_bucket_dd],
-                outputs=[summary_viewer],
-            )
+        # ── Step 5: Export ───────────────────────────────────────────────────
+        with gr.Column(visible=True) as col_step5:
+            gr.Markdown("## Step 5 — Export")
+            gr.Markdown("Step 5 content coming soon")
+            with gr.Row():
+                back5 = gr.Button("← Back")
+                next5 = gr.Button("Next →", variant="primary", interactive=False)
 
-        # ── Step 4: Export ───────────────────────────────────────────────────
-        with gr.Tab("④ Export"):
-            gr.Markdown("""
-            ### Export Your Context Files
+        # ── Navigation wiring ────────────────────────────────────────────────
+        _nav_outputs = [step_indicator, col_step0, col_step1, col_step2, col_step3, col_step4, col_step5]
 
-            Generates clean markdown files ready to upload to Claude Projects
-            (or any other LLM service).
-            """)
+        next0.click(fn=lambda: _nav(1), outputs=_nav_outputs)
+        next3.click(fn=lambda: _nav(4), outputs=_nav_outputs)
+        next4.click(fn=lambda: _nav(5), outputs=_nav_outputs)
 
-            output_dir_input = gr.Textbox(
-                label="Output folder",
-                value=str(config.get_output_dir()),
-                placeholder="Leave blank to use default"
-            )
-            export_btn = gr.Button("💾 Export Context Files", variant="primary")
-            export_output = gr.Markdown()
+        back1.click(fn=lambda: _nav(0), outputs=_nav_outputs)
+        back2.click(fn=lambda: _nav(1), outputs=_nav_outputs)
+        back3.click(fn=lambda: _nav(2), outputs=_nav_outputs)
+        back4.click(fn=lambda: _nav(3), outputs=_nav_outputs)
+        back5.click(fn=lambda: _nav(4), outputs=_nav_outputs)
 
-            export_btn.click(
-                fn=handle_export,
-                inputs=[output_dir_input],
-                outputs=[export_output, biography_preview]
-            )
+        # ── Step 1 wiring ────────────────────────────────────────────────────
+        load_btn.click(
+            fn=handle_upload,
+            inputs=[zip_upload],
+            outputs=[upload_msg, inspect_btn],
+        )
 
-        # ── Settings ─────────────────────────────────────────────────────────
-        with gr.Tab("⚙️ Settings"):
-            gr.Markdown("### Settings")
+        # INSPECT → just advances the wizard, no data loading
+        inspect_btn.click(
+            fn=lambda: _nav(2),
+            outputs=_nav_outputs,
+        )
 
-            user_name_input = gr.Textbox(
-                label="Your name (optional — included in master context doc)",
-                value=cfg.get("user_name", ""),
-                placeholder="e.g. Don"
-            )
+        # ── Step 2 wiring ────────────────────────────────────────────────────
 
-            ollama_model_input = gr.Dropdown(
-                label="Ollama model",
-                choices=[
-                    ("llama3.2 (default, fastest — 3B)", "llama3.2"),
-                    ("llama3.1:8b (better quality — 8B)", "llama3.1:8b"),
-                    ("mistral-nemo:12b (best quality — 12B)", "mistral-nemo:12b"),
-                    ("mistral:7b (fast alternative — 7B)", "mistral:7b"),
-                ],
-                value=cfg.get("ollama_model", "llama3.2"),
-                allow_custom_value=True,
-                info="Larger models produce richer summaries but run slower. All models run 100% locally on your machine via Ollama.",
-            )
+        # RUN BADGE SCAN fires independently — raw values only, no nav conflict
+        def _run_scan():
+            if not state["conversations"]:
+                return "", [], ""
+            return _badge_dashboard_html(), _to_df_rows(), _selection_count_text()
 
-            ollama_url_input = gr.Textbox(
-                label="Ollama URL (advanced)",
-                value=cfg.get("ollama_url", "http://localhost:11434"),
-            )
+        scan_btn.click(
+            fn=_run_scan,
+            outputs=[badge_dashboard_html, conv_df, selection_count],
+        )
 
-            summary_style_input = gr.Dropdown(
-                label="Summary Style",
-                choices=["Concise (4-6 sentences)", "Detailed (8-20 bullet points)"],
-                value="Detailed (8-20 bullet points)" if cfg.get("summary_style") == "detailed" else "Concise (4-6 sentences)",
-            )
+        sort_date_btn.click(fn=handle_sort_date, outputs=[conv_df, selection_count])
+        sort_size_btn.click(fn=handle_sort_size, outputs=[conv_df, selection_count])
+        sort_title_btn.click(fn=handle_sort_title, outputs=[conv_df, selection_count])
 
-            gr.Markdown("---\n**Test Mode**")
-            test_mode_input = gr.Checkbox(
-                label="Test Mode — analyze a random sample of N conversations",
-                value=cfg.get("test_mode", False),
-            )
-            test_mode_n_input = gr.Number(
-                label="N",
-                value=cfg.get("test_mode_n", 20),
-                precision=0,
-                minimum=1,
-            )
+        apply_filter_btn.click(
+            fn=handle_apply_filter,
+            inputs=[from_date_tb, to_date_tb],
+            outputs=[conv_df, selection_count],
+        )
+        clear_filter_btn.click(
+            fn=handle_clear_filter,
+            outputs=[from_date_tb, to_date_tb, conv_df, selection_count],
+        )
 
-            save_settings_btn = gr.Button("💾 Save Settings")
-            settings_output = gr.Markdown()
+        select_all_btn.click(fn=handle_select_all, outputs=[conv_df, selection_count])
+        deselect_all_btn.click(fn=handle_deselect_all, outputs=[conv_df, selection_count])
+        deselect_noise_btn.click(fn=handle_deselect_noise, outputs=[conv_df, selection_count])
 
-            def save_settings(name, model, url, style, test_mode, test_mode_n):
-                config.set_value("user_name", name)
-                config.set_value("ollama_model", model)
-                config.set_value("ollama_url", url)
-                config.set_value("summary_style", "detailed" if "Detailed" in style else "concise")
-                config.set_value("test_mode", bool(test_mode))
-                config.set_value("test_mode_n", int(test_mode_n) if test_mode_n else 20)
-                return "✅ Settings saved."
+        conv_df.change(fn=handle_table_change, inputs=[conv_df], outputs=[selection_count])
 
-            save_settings_btn.click(
-                fn=save_settings,
-                inputs=[user_name_input, ollama_model_input, ollama_url_input, summary_style_input, test_mode_input, test_mode_n_input],
-                outputs=[settings_output]
-            )
+        analyze_btn.click(fn=lambda: _nav(3), outputs=_nav_outputs)
+
+        app.load(fn=lambda: _nav(0), outputs=_nav_outputs)
 
     return app
 
 
 # ── Launch ────────────────────────────────────────────────────────────────────
-
+def _run_scan():
+    print(f"[scan] conversations in state: {len(state['conversations'])}")
+    if not state["conversations"]:
+        return "", [], ""
+    return _badge_dashboard_html(), _to_df_rows(), _selection_count_text()
 if __name__ == "__main__":
     print("=== LLM Conversation Memory Migrator ===")
     print("Starting local server — no internet connection used.")
@@ -934,5 +1157,34 @@ if __name__ == "__main__":
         server_port=7860,
         share=False,
         inbrowser=True,
-        theme=gr.themes.Soft(),
+        css=DARK_CSS,
+        theme=gr.themes.Base(
+            primary_hue=gr.themes.colors.Color(
+                c50="#fff3ee", c100="#ffe0cc", c200="#ffbf99", c300="#ff9d66",
+                c400="#ff7c33", c500="#ff6b1a", c600="#cc5200", c700="#993d00",
+                c800="#662900", c900="#331400", c950="#1a0a00",
+            ),
+            secondary_hue=gr.themes.colors.Color(
+                c50="#e0faf7", c100="#b3f4ed", c200="#66e9db", c300="#33dfd0",
+                c400="#00d4c0", c500="#00c9b1", c600="#00a18e", c700="#00796b",
+                c800="#005048", c900="#002824", c950="#001412",
+            ),
+            neutral_hue=gr.themes.colors.gray,
+            font=[gr.themes.GoogleFont("Barlow"), "sans-serif"],
+            font_mono=[gr.themes.GoogleFont("Space Mono"), "monospace"],
+        ).set(
+            body_background_fill="#080c10",
+            body_text_color="#e6edf3",
+            block_background_fill="#0d1117",
+            block_border_color="rgba(255,107,26,0.2)",
+            block_border_width="1px",
+            block_label_text_color="#8b949e",
+            input_background_fill="#0d1117",
+            input_border_color="rgba(255,107,26,0.2)",
+            button_primary_background_fill="#ff6b1a",
+            button_primary_text_color="#000000",
+            button_secondary_background_fill="#161b22",
+            button_secondary_text_color="#e6edf3",
+            button_secondary_border_color="rgba(255,107,26,0.2)",
+        ),
     )
